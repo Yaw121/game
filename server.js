@@ -12,6 +12,7 @@ app.use(express.static(__dirname));
 app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 
 const rooms = new Map();
+const quickQueue = []; // { socketId, name, token, joinedAt }
 const ALLOWED_DIFFICULTIES = new Set([50, 100, 150]);
 const ALLOWED_MODES = new Set(['first5', 'first10', 'timed']);
 const ALLOWED_STYLES = new Set(['classic', 'duel']);
@@ -285,6 +286,51 @@ setInterval(() => {
 }, 500);
 
 io.on('connection', socket => {
+  socket.on('quick:join', ({ name, playerToken } = {}, callback = () => {}) => {
+    // Remove stale/duplicate queue entries first.
+    for (let i = quickQueue.length - 1; i >= 0; i--) {
+      const q = quickQueue[i];
+      if (q.socketId === socket.id || !io.sockets.sockets.get(q.socketId)) quickQueue.splice(i, 1);
+    }
+    const waiting = quickQueue.shift();
+    if (!waiting) {
+      quickQueue.push({ socketId: socket.id, name: sanitizeName(name), token: String(playerToken || crypto.randomUUID()), joinedAt: Date.now() });
+      socket.data.inQuickQueue = true;
+      return callback({ ok: true, waiting: true });
+    }
+
+    const otherSocket = io.sockets.sockets.get(waiting.socketId);
+    if (!otherSocket) {
+      quickQueue.push({ socketId: socket.id, name: sanitizeName(name), token: String(playerToken || crypto.randomUUID()), joinedAt: Date.now() });
+      socket.data.inQuickQueue = true;
+      return callback({ ok: true, waiting: true });
+    }
+
+    const code = makeCode();
+    const p1 = { id: makePlayerId(), token: waiting.token, socketId: otherSocket.id, name: waiting.name, connected: true, disconnectedAt: null, score: 0, finds: 0, totalFindMs: 0, fastestFindMs: null, wrongTaps: 0, attempts: 0 };
+    const p2 = { id: makePlayerId(), token: String(playerToken || crypto.randomUUID()), socketId: socket.id, name: sanitizeName(name), connected: true, disconnectedAt: null, score: 0, finds: 0, totalFindMs: 0, fastestFindMs: null, wrongTaps: 0, attempts: 0 };
+    const room = {
+      code, hostId: p1.id, difficulty: 100, mode: 'first5', playStyle: 'duel',
+      board: shuffledBoard(100), found: [], players: [p1, p2], currentCallerId: null,
+      target: null, round: 1, countdownStartedAt: null, searchStartsAt: null,
+      matchStartedAt: Date.now(), lastResult: null, status: 'playing', winnerId: null,
+      endedReason: null, createdAt: Date.now(), endedAt: null, emptySince: null, quickPlay: true
+    };
+    rooms.set(code, room);
+    for (const [sck, pl] of [[otherSocket,p1],[socket,p2]]) {
+      sck.join(code); sck.data.roomCode = code; sck.data.playerId = pl.id; sck.data.inQuickQueue = false;
+    }
+    otherSocket.emit('quick:matched', { room: publicRoom(room), playerId: p1.id, playerToken: p1.token });
+    socket.emit('quick:matched', { room: publicRoom(room), playerId: p2.id, playerToken: p2.token });
+    callback({ ok: true, waiting: false, matched: true });
+    emitRoom(room);
+    scheduleDuelRound(room, 900);
+  });
+
+  socket.on('quick:cancel', () => {
+    for (let i = quickQueue.length - 1; i >= 0; i--) if (quickQueue[i].socketId === socket.id) quickQueue.splice(i, 1);
+    socket.data.inQuickQueue = false;
+  });
   socket.on('room:create', ({ name, difficulty, mode, playStyle, playerToken } = {}, callback = () => {}) => {
     const selectedDifficulty = ALLOWED_DIFFICULTIES.has(Number(difficulty)) ? Number(difficulty) : 100;
     const selectedMode = ALLOWED_MODES.has(mode) ? mode : 'first5';
@@ -522,6 +568,7 @@ io.on('connection', socket => {
   });
 
   socket.on('disconnect', () => {
+    for (let i = quickQueue.length - 1; i >= 0; i--) if (quickQueue[i].socketId === socket.id) quickQueue.splice(i, 1);
     const room = getRoomForSocket(socket);
     if (!room) return;
     const player = getPlayerForSocket(socket, room);
@@ -534,4 +581,4 @@ io.on('connection', socket => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, '0.0.0.0', () => console.log(`Number Hunt v4 running on port ${PORT}`));
+server.listen(PORT, '0.0.0.0', () => console.log(`Number Hunt v5 running on port ${PORT}`));

@@ -6,125 +6,92 @@
   <meta name="theme-color" content="#07100b" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <title>Number Hunt Online</title>
+  <title>Number Hunt</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <main class="app">
-    <section id="lobby" class="panel lobby">
-      <div class="brand">NUMBER HUNT</div>
-      <h1>Find it fast.</h1>
-      <p class="sub">Play Classic or race head-to-head in Speed Duel. Same scrambled board, same target, fastest eyes win.</p>
+<main class="app">
+  <section id="lobby" class="panel lobby">
+    <div class="brand">NUMBER HUNT</div>
+    <h1>How fast are your eyes?</h1>
+    <p class="sub">Find the number before your opponent. Win matches, earn XP and climb the ranks.</p>
 
-      <section id="profileCard" class="profileCard"></section>
+    <section id="profileCard" class="profileCard"></section>
+    <label>Username</label>
+    <input id="nameInput" maxlength="18" placeholder="Choose a username" autocomplete="nickname" />
 
-      <label>Your name</label>
-      <input id="nameInput" maxlength="18" placeholder="Player name" autocomplete="nickname" />
+    <div class="mainModes">
+      <button id="quickPlayBtn" class="modeHero primary">⚡ Quick Play<span>Instant Speed Duel · First to 5</span></button>
+      <button id="playFriendBtn" class="modeHero">👥 Play Friend<span>Create or join a private room</span></button>
+      <button id="dailyBtn" class="modeHero">☀️ Daily Challenge<span>Same challenge for everyone today</span></button>
+    </div>
 
+    <section id="quickPanel" class="setupPanel hidden">
+      <div class="searchPulse"></div>
+      <h3>Finding an opponent…</h3>
+      <p class="sub">You’ll be matched into a 1–100 Speed Duel.</p>
+      <button id="cancelQuickBtn">Cancel</button>
+    </section>
+
+    <section id="friendPanel" class="setupPanel hidden">
       <label>Difficulty</label>
-      <div class="difficulty" id="difficultyPicker">
+      <div class="picker" id="difficultyPicker">
         <button class="choiceBtn" data-value="50">Easy<span>1–50</span></button>
         <button class="choiceBtn selected" data-value="100">Normal<span>1–100</span></button>
         <button class="choiceBtn" data-value="150">Hard<span>1–150</span></button>
       </div>
-
-
       <label>Game style</label>
-      <div class="stylePicker" id="stylePicker">
-        <button class="styleBtn selected" data-value="classic">Classic<span>Call & find</span></button>
-        <button class="styleBtn" data-value="duel">⚡ Speed Duel<span>Both find the same number</span></button>
+      <div class="picker" id="stylePicker">
+        <button class="styleBtn" data-value="classic">Classic<span>Call & find</span></button>
+        <button class="styleBtn selected" data-value="duel">⚡ Speed Duel<span>Both hunt</span></button>
       </div>
-
-      <label>Match mode</label>
-      <div class="modePicker" id="modePicker">
-        <button class="modeBtn selected" data-value="first5">First to 5<span>Quick match</span></button>
-        <button class="modeBtn" data-value="first10">First to 10<span>Longer match</span></button>
-        <button class="modeBtn" data-value="timed">2 minutes<span>Most finds wins</span></button>
+      <label>Match</label>
+      <div class="picker" id="modePicker">
+        <button class="modeBtn selected" data-value="first5">First to 5<span>Quick</span></button>
+        <button class="modeBtn" data-value="first10">First to 10<span>Long</span></button>
+        <button class="modeBtn" data-value="timed">2 min<span>Most finds</span></button>
       </div>
-
-      <div class="actions"><button id="createBtn" class="primary">Create room</button></div>
-      <div class="divider"><span>or</span></div>
-      <label>Join with room code</label>
-      <div class="joinRow">
-        <input id="codeInput" maxlength="5" placeholder="ABCDE" autocomplete="off" autocapitalize="characters" />
-        <button id="joinBtn">Join</button>
-      </div>
-      <p id="lobbyMsg" class="msg"></p>
+      <button id="createBtn" class="primary wide">Create Room</button>
+      <div class="divider"><span>or join</span></div>
+      <div class="joinRow"><input id="codeInput" maxlength="5" placeholder="ABCDE" autocapitalize="characters" /><button id="joinBtn">Join</button></div>
     </section>
+    <p id="lobbyMsg" class="msg"></p>
+  </section>
 
-    <section id="game" class="game hidden">
-      <header class="topbar stickyTop">
-        <div>
-          <div class="tiny">ROOM</div>
-          <button id="roomCode" class="codeBtn" title="Share room">-----</button>
-        </div>
-        <div class="centerStatus">
-          <div id="turnText" class="turnText">Waiting for player…</div>
-          <div id="targetText" class="targetText">Share the room code</div>
-        </div>
-        <button id="inviteBtn" class="ghost miniBtn">Invite</button>
-      </header>
-
-      <section class="roundHud stickyHud">
-        <div class="roundPill"><span>ROUND</span><strong id="roundNum">1</strong></div>
-        <div class="timerWrap">
-          <div class="timerTop"><span id="timerLabel">READY</span><strong id="timerText">20.0</strong></div>
-          <div class="timerTrack"><div id="timerBar" class="timerBar"></div></div>
-        </div>
-        <div class="roundPill"><span id="modeLabel">FIRST TO</span><strong id="modeValue">5</strong></div>
-      </section>
-
-      <section id="scoreBar" class="scoreBar"></section>
-
-      <section class="boardWrap"><div id="board" class="board"></div></section>
-
-      <section class="controls panel stickyControls">
-        <div id="callerControls" class="hidden controlBlock">
-          <strong>Your turn to call a number</strong>
-          <div class="callRow">
-            <input id="numberInput" type="number" min="1" max="100" placeholder="1–100" inputmode="numeric" />
-            <button id="callBtn" class="primary">Call</button>
-          </div>
-          <button id="randomBtn" class="secondaryWide">🎲 Give me a number</button>
-          <span class="hint">Tap an uncircled number to fill the box, or let the game choose one.</span>
-        </div>
-        <div id="finderControls" class="hidden controlBlock">
-          <strong>Find the called number and tap it.</strong>
-          <span class="hint">Wrong tap: −5 points. Timeout: −10 points.</span>
-        </div>
-        <div id="waitingControls" class="controlBlock">
-          <strong>Waiting for Player 2…</strong>
-          <span class="hint">Tap Invite to send your friend the room link.</span>
-        </div>
-        <div id="reconnectNotice" class="hidden reconnectNotice">Opponent disconnected — holding their seat for 90 seconds…</div>
-        <div class="roomActions">
-          <button id="removePlayerBtn" class="dangerBtn hidden">Remove Player</button>
-          <button id="leaveGameBtn" class="ghost leaveBtn">Leave Game</button>
-        </div>
-        <p id="gameMsg" class="msg"></p>
-      </section>
+  <section id="game" class="game hidden">
+    <header class="topbar">
+      <div><div class="tiny">ROOM</div><button id="roomCode" class="codeBtn">-----</button></div>
+      <div class="centerStatus"><div id="turnText" class="turnText">Waiting…</div><div id="targetText" class="targetText">Get ready</div></div>
+      <button id="inviteBtn" class="ghost miniBtn">Invite</button>
+    </header>
+    <section class="roundHud">
+      <div class="roundPill"><span>ROUND</span><strong id="roundNum">1</strong></div>
+      <div class="timerWrap"><div class="timerTop"><span id="timerLabel">READY</span><strong id="timerText">20.0</strong></div><div class="timerTrack"><div id="timerBar" class="timerBar"></div></div></div>
+      <div class="roundPill"><span id="modeLabel">FIRST TO</span><strong id="modeValue">5</strong></div>
     </section>
-  </main>
+    <section id="scoreBar" class="scoreBar"></section>
+    <section class="boardWrap"><div id="board" class="board"></div></section>
+    <section class="controls panel">
+      <div id="callerControls" class="hidden"><strong>Your turn to call</strong><div class="callRow"><input id="numberInput" type="number" inputmode="numeric"/><button id="callBtn" class="primary">Call</button></div><button id="randomBtn" class="wide">🎲 Give me a number</button></div>
+      <div id="finderControls" class="hidden"><strong>Find the target and tap it.</strong><span class="hint">Wrong tap −5 · Timeout −10</span></div>
+      <div id="waitingControls"><strong>Waiting for Player 2…</strong></div>
+      <div class="roomActions"><button id="removePlayerBtn" class="danger hidden">Remove Player</button><button id="leaveGameBtn">Leave Game</button></div>
+      <p id="gameMsg" class="msg"></p>
+    </section>
+  </section>
 
-  <div id="countdown" class="countdownOverlay hidden"><div id="countdownText">3</div></div>
+  <section id="daily" class="game hidden">
+    <header class="topbar"><button id="dailyBackBtn" class="ghost">← Back</button><div class="centerStatus"><div class="turnText">DAILY CHALLENGE</div><div id="dailyDate" class="targetText"></div></div><div id="dailyXp" class="xpChip">+0 XP</div></header>
+    <section class="roundHud"><div class="roundPill"><span>FOUND</span><strong id="dailyFound">0/10</strong></div><div class="timerWrap"><div class="timerTop"><span>TIME</span><strong id="dailyTimer">0.0</strong></div><div class="timerTrack"><div id="dailyTimerBar" class="timerBar"></div></div></div><div class="roundPill"><span>BEST</span><strong id="dailyBest">—</strong></div></section>
+    <section class="dailyTarget">FIND <strong id="dailyTarget">?</strong></section>
+    <section class="boardWrap"><div id="dailyBoard" class="board"></div></section>
+    <section class="controls panel"><p id="dailyMsg" class="msg">Same board and target order all day. Beat your best time.</p></section>
+  </section>
+</main>
 
-  <div id="resultModal" class="modal hidden" role="dialog" aria-modal="true">
-    <div class="modalCard">
-      <div class="brand">MATCH COMPLETE</div>
-      <div id="resultStyleBadge" class="resultStyleBadge"></div>
-      <h2 id="winnerTitle">Winner!</h2>
-      <p id="winnerSubtitle" class="sub"></p>
-      <div id="finalStats" class="finalStats"></div>
-      <div class="modalActions">
-        <button id="rematchBtn" class="primary">Rematch</button>
-        <button id="closeStatsBtn">View board</button>
-      </div>
-    </div>
-  </div>
-
-  <div id="toast" class="toast"></div>
-  <div id="flash" class="flash"></div>
-  <script src="/socket.io/socket.io.js"></script>
-  <script src="app.js"></script>
-</body>
-</html>
+<div id="countdown" class="countdownOverlay hidden"><div id="countdownText">3</div></div>
+<div id="resultModal" class="modal hidden"><div class="modalCard"><div class="brand">MATCH COMPLETE</div><div id="rankChange" class="rankChange"></div><h2 id="winnerTitle">Winner!</h2><p id="winnerSubtitle" class="sub"></p><div id="finalStats" class="finalStats"></div><div class="modalActions"><button id="rematchBtn" class="primary">Rematch</button><button id="homeBtn">Home</button></div></div></div>
+<div id="dailyModal" class="modal hidden"><div class="modalCard"><div class="brand">DAILY COMPLETE</div><h2 id="dailyResultTitle">Challenge cleared!</h2><p id="dailyResultText" class="sub"></p><button id="dailyAgainBtn" class="primary wide">Try Again</button><button id="dailyHomeBtn" class="wide">Home</button></div></div>
+<div id="toast" class="toast"></div><div id="flash" class="flash"></div>
+<script src="/socket.io/socket.io.js"></script><script src="app.js"></script>
+</body></html>

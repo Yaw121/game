@@ -1,25 +1,13 @@
-# Number Hunt Online v4
+# Number Hunt V5
 
-A mobile-first two-player visual search game powered by Node.js, Express and Socket.IO.
+Mobile-first number hunting game with three entry paths:
 
-## New in v4
-- **Speed Duel:** both players receive the same target and race to tap it first.
-- Classic caller/finder mode is still available.
-- More chaotic, paper-like number placement while keeping touch targets usable.
-- Stronger correct/wrong animations, haptics and sound cues.
-- Local player record card: games, wins, win rate, finds, accuracy and personal best are saved in the browser.
-- Existing match formats: First to 5, First to 10 and 2-minute match.
-- Invite links, rematches, post-match stats, leave/kick controls and 90-second reconnect protection.
+- **Quick Play**: instant online matchmaking into a 1–100 Speed Duel, First to 5.
+- **Play Friend**: private rooms with Classic or Speed Duel, multiple difficulties and match formats.
+- **Daily Challenge**: deterministic 1–100 board and 10-number target sequence shared by everyone for that UTC date; local best time and daily XP reward.
 
-## Run locally
-```bash
-npm install
-npm start
-```
-Open http://localhost:3000.
+V5 also adds a local XP/rank progression system: Bronze, Silver, Gold, Platinum, Diamond, Master and Legend. Match results and daily challenges award XP. Stats and rank persist in the browser on that device.
 
-## Deploy on Render
-Build command: `npm install`
-Start command: `npm start`
+## Deploy
 
-Keep all six files at the repository root.
+Replace the existing GitHub repo files with these files, commit, then redeploy the existing Render web service. Keep `npm install` as the build command and `npm start` as the start command.

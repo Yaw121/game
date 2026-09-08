@@ -1,482 +1,56 @@
-const socket = io();
-let room = null;
-let myId = null;
-let missNumber = null;
-let selectedDifficulty = 100;
-let selectedMode = 'first5';
-let selectedPlayStyle = 'classic';
-let lastFoundNumber = null;
-let lastStatsSavedStamp = null;
-let rafId = null;
-let countdownRaf = null;
-let lastEndedStamp = null;
-
-const $ = s => document.querySelector(s);
-const lobby = $('#lobby');
-const game = $('#game');
-const board = $('#board');
-const lobbyMsg = $('#lobbyMsg');
-const gameMsg = $('#gameMsg');
-
-const playerTokenKey = 'numberHuntPlayerToken';
-const roomCodeKey = 'numberHuntRoomCode';
-let playerToken = localStorage.getItem(playerTokenKey) || cryptoRandomToken();
-localStorage.setItem(playerTokenKey, playerToken);
-
-function cryptoRandomToken() {
-  try { return crypto.randomUUID(); }
-  catch { return `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`; }
-}
-
-function modeName(mode) {
-  if (mode === 'first5') return 'First to 5';
-  if (mode === 'first10') return 'First to 10';
-  return '2 Minute Match';
-}
-
-function styleName(style) { return style === 'duel' ? '⚡ Speed Duel' : 'Classic'; }
-
-function modeShort(mode) {
-  if (mode === 'first5') return ['FIRST TO', '5'];
-  if (mode === 'first10') return ['FIRST TO', '10'];
-  return ['MATCH', '2:00'];
-}
-
-function vibrate(pattern = 25) { try { navigator.vibrate?.(pattern); } catch {} }
-function beep(kind = 'good') {
-  try {
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    const ctx = new AudioCtx();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain); gain.connect(ctx.destination);
-    osc.frequency.value = kind === 'good' ? 740 : kind === 'go' ? 520 : 180;
-    gain.gain.setValueAtTime(0.05, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.12);
-    osc.start(); osc.stop(ctx.currentTime + 0.12);
-  } catch {}
-}
-function flash(type) {
-  const el = $('#flash');
-  el.className = `flash ${type}`;
-  requestAnimationFrame(() => el.classList.add('show'));
-  setTimeout(() => el.classList.remove('show'), 180);
-}
-function showToast(text) {
-  const el = $('#toast');
-  el.textContent = text;
-  el.classList.add('show');
-  clearTimeout(showToast.t);
-  showToast.t = setTimeout(() => el.classList.remove('show'), 2200);
-}
-function nameValue() { return ($('#nameInput').value.trim() || 'Player').slice(0, 18); }
-
-function getProfile() {
-  const base = { games: 0, wins: 0, losses: 0, ties: 0, finds: 0, attempts: 0, wrongTaps: 0, totalFindMs: 0 };
-  try { return { ...base, ...JSON.parse(localStorage.getItem('numberHuntProfileV4') || '{}') }; }
-  catch { return base; }
-}
-function renderProfile() {
-  const p = getProfile();
-  const winRate = p.games ? Math.round((p.wins / p.games) * 100) : 0;
-  const accuracy = p.attempts ? Math.round((p.finds / p.attempts) * 100) : 0;
-  const avg = p.finds ? `${(p.totalFindMs / p.finds / 1000).toFixed(2)}s` : '—';
-  const best = Number(localStorage.getItem('numberHuntBestMs'));
-  $('#profileCard').innerHTML = `<div class="profileHead"><span>YOUR RECORD</span><strong>${p.wins}W · ${p.losses}L${p.ties ? ` · ${p.ties}T` : ''}</strong></div><div class="profileStats"><div><span>GAMES</span><strong>${p.games}</strong></div><div><span>WIN RATE</span><strong>${winRate}%</strong></div><div><span>BEST</span><strong>${best > 0 ? `${(best/1000).toFixed(2)}s` : '—'}</strong></div><div><span>AVG FIND</span><strong>${avg}</strong></div><div><span>ACCURACY</span><strong>${accuracy}%</strong></div></div>`;
-}
-function saveMatchStatsOnce() {
-  if (!room || room.status !== 'ended') return;
-  const stamp = `${room.code}:${room.endedAt || room.endedReason}:${room.round}:${room.winnerId}`;
-  if (stamp === lastStatsSavedStamp) return;
-  const me = room.players.find(p => p.id === myId);
-  if (!me) return;
-  lastStatsSavedStamp = stamp;
-  const p = getProfile();
-  p.games += 1;
-  if (!room.winnerId) p.ties += 1;
-  else if (room.winnerId === myId) p.wins += 1;
-  else p.losses += 1;
-  p.finds += me.finds || 0;
-  p.attempts += me.attempts || 0;
-  p.wrongTaps += me.wrongTaps || 0;
-  p.totalFindMs += me.totalFindMs || 0;
-  localStorage.setItem('numberHuntProfileV4', JSON.stringify(p));
-  renderProfile();
-}
-renderProfile();
-
-socket.on('connect', () => {
-  const savedCode = localStorage.getItem(roomCodeKey);
-  if (savedCode && playerToken && !room) {
-    socket.emit('room:resume', { code: savedCode, playerToken }, res => {
-      if (res?.ok) {
-        myId = res.playerId;
-        playerToken = res.playerToken || playerToken;
-        room = res.room;
-        enterGame();
-        render();
-        showToast('Reconnected to your match');
-      } else {
-        localStorage.removeItem(roomCodeKey);
-      }
-    });
-  }
-});
-socket.on('disconnect', () => showToast('Connection lost… reconnecting'));
-
-$('#difficultyPicker').addEventListener('click', e => {
-  const btn = e.target.closest('.choiceBtn'); if (!btn) return;
-  selectedDifficulty = Number(btn.dataset.value);
-  document.querySelectorAll('.choiceBtn').forEach(b => b.classList.toggle('selected', b === btn));
-  vibrate(10);
-});
-$('#modePicker').addEventListener('click', e => {
-  const btn = e.target.closest('.modeBtn'); if (!btn) return;
-  selectedMode = btn.dataset.value;
-  document.querySelectorAll('.modeBtn').forEach(b => b.classList.toggle('selected', b === btn));
-  vibrate(10);
-});
-$('#stylePicker').addEventListener('click', e => {
-  const btn = e.target.closest('.styleBtn'); if (!btn) return;
-  selectedPlayStyle = btn.dataset.value;
-  document.querySelectorAll('.styleBtn').forEach(b => b.classList.toggle('selected', b === btn));
-  vibrate(10);
-});
-
-$('#createBtn').onclick = () => {
-  lobbyMsg.textContent = '';
-  socket.emit('room:create', { name: nameValue(), difficulty: selectedDifficulty, mode: selectedMode, playStyle: selectedPlayStyle, playerToken }, res => {
-    if (!res?.ok) return lobbyMsg.textContent = res?.error || 'Could not create room.';
-    myId = res.playerId; playerToken = res.playerToken || playerToken; room = res.room;
-    localStorage.setItem(playerTokenKey, playerToken); localStorage.setItem(roomCodeKey, room.code);
-    enterGame(); render();
-  });
-};
-
-$('#joinBtn').onclick = () => {
-  lobbyMsg.textContent = '';
-  socket.emit('room:join', { code: $('#codeInput').value, name: nameValue(), playerToken }, res => {
-    if (!res?.ok) return lobbyMsg.textContent = res?.error || 'Could not join room.';
-    myId = res.playerId; playerToken = res.playerToken || playerToken; room = res.room;
-    localStorage.setItem(playerTokenKey, playerToken); localStorage.setItem(roomCodeKey, room.code);
-    enterGame(); render();
-  });
-};
-$('#codeInput').addEventListener('input', e => e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''));
-
-const urlRoom = new URLSearchParams(location.search).get('room');
-if (urlRoom) $('#codeInput').value = urlRoom.toUpperCase().slice(0, 5);
-
-function enterGame() { lobby.classList.add('hidden'); game.classList.remove('hidden'); }
-
-
-function returnToLobby(message = '') {
-  cancelAnimationFrame(rafId);
-  cancelAnimationFrame(countdownRaf);
-  localStorage.removeItem(roomCodeKey);
-  room = null;
-  myId = null;
-  missNumber = null;
-  lastEndedStamp = null;
-  lastStatsSavedStamp = null;
-  $('#resultModal').classList.add('hidden');
-  $('#countdown').classList.add('hidden');
-  game.classList.add('hidden');
-  lobby.classList.remove('hidden');
-  lobbyMsg.textContent = message;
-  renderProfile();
-}
-
-socket.on('room:kicked', ({ message } = {}) => {
-  returnToLobby(message || 'You were removed from the room.');
-  vibrate([60,40,60]);
-});
-
-socket.on('room:closed', ({ message } = {}) => {
-  returnToLobby(message || 'The room was closed.');
-  vibrate(50);
-});
-
-socket.on('room:update', data => {
-  room = data;
-  render();
-  if (room.status === 'ended') { saveMatchStatsOnce(); showResultsOnce(); }
-});
-socket.on('game:called', ({ duel } = {}) => { vibrate(duel ? [20,25,20,25,35] : [25,35,25]); renderCountdown(); renderTimer(); });
-socket.on('game:found', ({ number, finderId, finderName, elapsedMs, points }) => {
-  const secs = (elapsedMs / 1000).toFixed(2);
-  lastFoundNumber = number; renderBoard(); setTimeout(() => { if (lastFoundNumber === number) { lastFoundNumber = null; renderBoard(); } }, 700);
-  if (finderId === myId) {
-    showToast(`${room?.playStyle === 'duel' ? '🏁' : '⚡'} Found ${number} in ${secs}s  +${points}`); vibrate([30,30,55,30,90]); beep('good'); flash('good'); celebrate(); savePersonalBest(elapsedMs);
-  } else { showToast(`${room?.playStyle === 'duel' ? '🏁' : '⚡'} ${finderName || 'Opponent'} got ${number} in ${secs}s`); vibrate(18); }
-});
-socket.on('game:timeout', ({ number, finderId, duel }) => {
-  if (duel) { showToast(`Time! Nobody found ${number}. Both −10`); vibrate([70,50,70]); beep('bad'); flash('bad'); }
-  else if (finderId === myId) { showToast(`Time! ${number} was the target. −10`); vibrate([80,60,80]); beep('bad'); flash('bad'); }
-  else showToast(`Time! ${number} wasn't found.`);
-});
-socket.on('game:miss', ({ number, penalty }) => {
-  missNumber = number; renderBoard(); showToast(`Wrong number −${penalty}`); vibrate(60); beep('bad'); flash('bad');
-  setTimeout(() => { missNumber = null; renderBoard(); }, 430);
-});
-socket.on('game:rematch', () => { $('#resultModal').classList.add('hidden'); lastEndedStamp = null; lastStatsSavedStamp = null; showToast('Rematch started'); });
-socket.on('game:ended', data => { if (data?.room) room = data.room; render(); showResultsOnce(true); });
-
-function shareRoom() {
-  if (!room) return;
-  const url = new URL(location.href); url.searchParams.set('room', room.code);
-  const shareText = `Join my Number Hunt room ${room.code} — ${styleName(room.playStyle)}, ${modeName(room.mode)}.`;
-  if (navigator.share) {
-    navigator.share({ title: 'Number Hunt', text: shareText, url: url.toString() }).catch(() => {});
-  } else {
-    navigator.clipboard?.writeText(url.toString()).then(() => showToast('Invite link copied')).catch(() => showToast(`Room code: ${room.code}`));
-  }
-}
-$('#roomCode').onclick = shareRoom;
-$('#inviteBtn').onclick = shareRoom;
-
-
-$('#leaveGameBtn').onclick = () => {
-  if (!room) return returnToLobby();
-  const isHost = room.hostId === myId;
-  const message = isHost
-    ? 'Leave and close this room for everyone?'
-    : 'Leave this game?';
-  if (!confirm(message)) return;
-
-  socket.emit('room:leave', {}, res => {
-    if (!res?.ok) return showToast(res?.error || 'Could not leave the room.');
-    returnToLobby(isHost ? 'Room closed.' : 'You left the game.');
-  });
-};
-
-$('#removePlayerBtn').onclick = () => {
-  if (!room || room.hostId !== myId) return;
-  const opponent = room.players.find(p => p.id !== myId);
-  if (!opponent) return showToast('There is no player to remove.');
-  if (!confirm(`Remove ${opponent.name} from the room?`)) return;
-
-  socket.emit('room:kick', { playerId: opponent.id }, res => {
-    if (!res?.ok) return showToast(res?.error || 'Could not remove player.');
-    showToast(`${opponent.name} removed. You can invite someone else.`);
-  });
-};
-
-$('#callBtn').onclick = callNumber;
-$('#numberInput').addEventListener('keydown', e => { if (e.key === 'Enter') callNumber(); });
-function callNumber() {
-  const number = Number($('#numberInput').value); gameMsg.textContent = '';
-  socket.emit('game:call', { number }, res => {
-    if (!res?.ok) gameMsg.textContent = res?.error || 'Could not call that number.';
-    else $('#numberInput').value = '';
-  });
-}
-$('#randomBtn').onclick = () => {
-  gameMsg.textContent = '';
-  socket.emit('game:random', {}, res => {
-    if (!res?.ok) return gameMsg.textContent = res?.error || 'Could not choose a number.';
-    $('#numberInput').value = res.number;
-    vibrate(15);
-    showToast(`Random pick: ${res.number}`);
-  });
-};
-
-$('#rematchBtn').onclick = startRematch;
-function startRematch() {
-  if (!room) return;
-  socket.emit('game:new', { difficulty: room.difficulty, mode: room.mode, playStyle: room.playStyle }, res => {
-    if (!res?.ok) gameMsg.textContent = res?.error || 'Could not start rematch.';
-    else $('#resultModal').classList.add('hidden');
-  });
-}
-$('#closeStatsBtn').onclick = () => $('#resultModal').classList.add('hidden');
-
-function render() {
-  if (!room) return;
-  $('#roomCode').textContent = room.code;
-  document.body.classList.toggle('duelMode', room.playStyle === 'duel');
-  $('#roundNum').textContent = room.round;
-  const [modeLabel, modeValue] = modeShort(room.mode); $('#modeLabel').textContent = modeLabel; $('#modeValue').textContent = modeValue;
-  $('#numberInput').max = room.difficulty; $('#numberInput').placeholder = `1–${room.difficulty}`;
-  document.documentElement.style.setProperty('--cols', room.difficulty <= 50 ? 8 : room.difficulty <= 100 ? 10 : 12);
-  renderScore(); renderStatus(); renderBoard(); renderTimer(); renderCountdown();
-}
-
-function renderScore() {
-  $('#scoreBar').innerHTML = room.players.map(p => {
-    const avg = p.finds ? `${(p.totalFindMs / p.finds / 1000).toFixed(2)}s avg` : '— avg';
-    const fast = p.fastestFindMs != null ? `${(p.fastestFindMs / 1000).toFixed(2)}s best` : '— best';
-    return `<div class="playerCard ${room.playStyle === 'classic' && p.id === room.currentCallerId ? 'active' : ''} ${p.connected ? '' : 'offline'}">
-      <div class="playerMain"><span class="playerName">${escapeHtml(p.name)} ${p.id === myId ? '<em>YOU</em>' : ''}${p.connected ? '' : ' · offline'}</span><span class="playerStats">${p.finds} finds · ${avg} · ${fast} · ${p.wrongTaps} misses</span></div>
-      <span class="score">${p.score}</span>
-    </div>`;
-  }).join('');
-}
-
-function renderStatus() {
-  const waiting = !room.gameStarted || room.players.length < 2;
-  const iAmCaller = room.currentCallerId === myId;
-  const caller = room.players.find(p => p.id === room.currentCallerId);
-  const someoneOffline = room.players.length === 2 && room.players.some(p => !p.connected);
-  $('#reconnectNotice').classList.toggle('hidden', !someoneOffline);
-  const iAmHost = room.hostId === myId;
-  const hasOpponent = room.players.some(p => p.id !== myId);
-  $('#removePlayerBtn').classList.toggle('hidden', !(iAmHost && hasOpponent));
-  $('#waitingControls').classList.toggle('hidden', !waiting);
-  $('#callerControls').classList.add('hidden'); $('#finderControls').classList.add('hidden');
-
-  if (room.status === 'ended') {
-    $('#turnText').textContent = 'Match complete'; $('#targetText').textContent = 'View results or start a rematch'; return;
-  }
-  if (waiting) { $('#turnText').textContent = 'Waiting for Player 2…'; $('#targetText').textContent = `${styleName(room.playStyle)} · Share the room code`; return; }
-  if (someoneOffline) { $('#turnText').textContent = 'Opponent reconnecting…'; $('#targetText').textContent = 'Their seat is being held'; return; }
-
-  if (room.playStyle === 'duel') {
-    $('#finderControls').classList.remove('hidden');
-    const inCountdown = room.target !== null && Date.now() < room.searchStartsAt;
-    $('#finderControls strong').textContent = room.target === null ? 'Get ready for the next target.' : inCountdown ? 'Both players: get ready…' : `FIND ${room.target} — beat them to it!`;
-    $('#turnText').textContent = room.target === null ? '⚡ SPEED DUEL' : inCountdown ? 'BOTH GET READY' : `FIND ${room.target}`;
-    $('#targetText').textContent = room.target === null ? 'Same target. First correct tap wins the round.' : inCountdown ? 'The number unlocks at GO!' : 'First player to tap it scores';
-    return;
-  }
-
-  $('#finderControls strong').textContent = 'Find the called number and tap it.';
-  if (iAmCaller) {
-    $('#callerControls').classList.toggle('hidden', room.target !== null);
-    $('#turnText').textContent = room.target === null ? 'Your turn to call' : 'They are searching…';
-    $('#targetText').textContent = room.target === null ? 'Pick an uncircled number' : `You called ${room.target}`;
-  } else {
-    $('#finderControls').classList.remove('hidden');
-    const inCountdown = room.target !== null && Date.now() < room.searchStartsAt;
-    $('#turnText').textContent = room.target === null ? `${caller?.name || 'Opponent'} is choosing…` : inCountdown ? 'GET READY' : `FIND ${room.target}`;
-    $('#targetText').textContent = room.target === null ? 'Get ready' : inCountdown ? 'Search starts after the countdown' : 'Tap it before time runs out';
-  }
-}
-
-function chaos(n, idx, salt) {
-  let x = (n * 2654435761 + idx * 1597334677 + salt * 1013904223) >>> 0;
-  x ^= x >>> 16; x = Math.imul(x, 2246822519) >>> 0; x ^= x >>> 13;
-  return (x >>> 0) / 4294967295;
-}
-function renderBoard() {
-  if (!room) return;
-  const found = new Set(room.found); board.innerHTML = '';
-  room.board.forEach((n, idx) => {
-    const btn = document.createElement('button'); btn.className = 'num';
-    if (found.has(n)) btn.classList.add('found');
-    if (missNumber === n) btn.classList.add('miss');
-    if (lastFoundNumber === n) btn.classList.add('justFound');
-    const rotation = Math.round((chaos(n, idx, 1) * 30) - 15);
-    const dx = Math.round((chaos(n, idx, 2) * 10) - 5);
-    const dy = Math.round((chaos(n, idx, 3) * 10) - 5);
-    const scale = (0.84 + chaos(n, idx, 4) * 0.30).toFixed(2);
-    const weight = chaos(n, idx, 5) > .72 ? 800 : 950;
-    btn.style.setProperty('--r', `${rotation}deg`); btn.style.setProperty('--dx', `${dx}px`); btn.style.setProperty('--dy', `${dy}px`); btn.style.setProperty('--s', scale); btn.style.fontWeight = weight;
-    btn.textContent = n; btn.disabled = found.has(n); btn.onclick = () => onNumberTap(n); board.appendChild(btn);
-  });
-}
-
-function onNumberTap(n) {
-  if (!room || !room.gameStarted || room.status !== 'playing') return;
-  if (room.playStyle === 'duel') {
-    if (room.target === null) return showToast('Next target coming…');
-    if (Date.now() < room.searchStartsAt) return showToast('Wait for GO!');
-    gameMsg.textContent = '';
-    socket.emit('game:find', { number: n }, res => {
-      if (!res?.ok && !['Not the called number.','Time ran out.','Wait for GO!','Get ready for the next number.'].includes(res?.error)) gameMsg.textContent = res?.error || '';
-    });
-    return;
-  }
-  const iAmCaller = room.currentCallerId === myId;
-  if (iAmCaller && room.target === null) { $('#numberInput').value = n; vibrate(8); return; }
-  if (!iAmCaller && room.target !== null) {
-    if (Date.now() < room.searchStartsAt) return showToast('Wait for GO!');
-    gameMsg.textContent = '';
-    socket.emit('game:find', { number: n }, res => {
-      if (!res?.ok && !['Not the called number.','Time ran out.','Wait for GO!'].includes(res?.error)) gameMsg.textContent = res?.error || '';
-    });
-  }
-}
-
-function renderCountdown() {
-  cancelAnimationFrame(countdownRaf);
-  const overlay = $('#countdown'), text = $('#countdownText');
-  if (!room?.target || !room.searchStartsAt || (room.playStyle === 'classic' && room.currentCallerId === myId) || Date.now() >= room.searchStartsAt) {
-    overlay.classList.add('hidden'); return;
-  }
-  overlay.classList.remove('hidden');
-  const tick = () => {
-    if (!room?.target || !room.searchStartsAt) return overlay.classList.add('hidden');
-    const left = room.searchStartsAt - Date.now();
-    if (left <= 0) {
-      text.textContent = 'GO!'; overlay.classList.add('go'); beep('go'); vibrate([20,20,35]);
-      renderStatus();
-      setTimeout(() => { overlay.classList.add('hidden'); overlay.classList.remove('go'); }, 420); return;
-    }
-    text.textContent = Math.max(1, Math.ceil(left / 1000));
-    countdownRaf = requestAnimationFrame(tick);
-  };
-  tick();
-}
-
-function renderTimer() {
-  cancelAnimationFrame(rafId);
-  const bar = $('#timerBar'), text = $('#timerText'), label = $('#timerLabel');
-  const tick = () => {
-    if (!room) return;
-    if (room.mode === 'timed' && room.status === 'playing' && room.matchEndsAt) {
-      const matchLeft = Math.max(0, room.matchEndsAt - Date.now());
-      const mins = Math.floor(matchLeft / 60000), secs = Math.floor((matchLeft % 60000) / 1000).toString().padStart(2,'0');
-      $('#modeValue').textContent = `${mins}:${secs}`;
-    }
-    if (!room.target || !room.searchStartsAt || Date.now() < room.searchStartsAt) {
-      bar.style.transform = 'scaleX(1)'; bar.classList.remove('danger'); text.textContent = '20.0'; label.textContent = room.target ? 'READY' : 'READY';
-      rafId = requestAnimationFrame(tick); return;
-    }
-    const limit = room.roundLimitMs || 20000, left = Math.max(0, limit - (Date.now() - room.searchStartsAt));
-    text.textContent = (left / 1000).toFixed(1); label.textContent = 'TIME'; bar.style.transform = `scaleX(${left / limit})`; bar.classList.toggle('danger', left <= 5000);
-    rafId = requestAnimationFrame(tick);
-  };
-  tick();
-}
-
-function showResultsOnce(force = false) {
-  if (!room || room.status !== 'ended') return;
-  const stamp = `${room.code}:${room.endedReason}:${room.round}:${room.winnerId}`;
-  if (!force && stamp === lastEndedStamp) return; lastEndedStamp = stamp;
-  saveMatchStatsOnce();
-  $('#resultStyleBadge').textContent = `${styleName(room.playStyle)} · ${modeName(room.mode)}`;
-  const winner = room.players.find(p => p.id === room.winnerId);
-  $('#winnerTitle').textContent = room.winnerId ? (room.winnerId === myId ? 'You win! 🏆' : `${winner?.name || 'Opponent'} wins!`) : 'It’s a tie!';
-  $('#winnerSubtitle').textContent = room.endedReason === 'time' ? 'The 2-minute clock expired.' : room.endedReason?.startsWith('first-to-') ? `${modeName(room.mode)} completed.` : 'Board complete.';
-  $('#finalStats').innerHTML = room.players.map(p => {
-    const avg = p.finds ? `${(p.totalFindMs / p.finds / 1000).toFixed(2)}s` : '—';
-    const fast = p.fastestFindMs != null ? `${(p.fastestFindMs / 1000).toFixed(2)}s` : '—';
-    const accuracy = p.attempts ? `${Math.round((p.finds / p.attempts) * 100)}%` : '—';
-    return `<div class="statCard"><div class="statTitle"><span>${escapeHtml(p.name)} ${p.id === myId ? '· YOU' : ''}</span><strong>${p.score} pts</strong></div><div class="statGrid"><div><span>FINDS</span><strong>${p.finds}</strong></div><div><span>FASTEST</span><strong>${fast}</strong></div><div><span>AVERAGE</span><strong>${avg}</strong></div><div><span>ACCURACY</span><strong>${accuracy}</strong></div></div></div>`;
-  }).join('');
-  const best = Number(localStorage.getItem('numberHuntBestMs'));
-  if (Number.isFinite(best) && best > 0) $('#winnerSubtitle').textContent += ` Your personal best: ${(best / 1000).toFixed(2)}s.`;
-  $('#resultModal').classList.remove('hidden');
-  if (room.winnerId === myId) { beep('good'); vibrate([40,30,40,30,90]); }
-}
-
-function savePersonalBest(ms) {
-  const key = 'numberHuntBestMs'; const prev = Number(localStorage.getItem(key));
-  if (!prev || ms < prev) { localStorage.setItem(key, String(ms)); showToast(`🏅 New personal best: ${(ms / 1000).toFixed(2)}s`); }
-}
-
-function celebrate() {
-  const wrap = document.createElement('div'); wrap.className = 'celebration';
-  for (let i = 0; i < 14; i++) {
-    const bit = document.createElement('i');
-    bit.style.setProperty('--x', `${(Math.random() * 180 - 90).toFixed(0)}px`);
-    bit.style.setProperty('--y', `${(-80 - Math.random() * 160).toFixed(0)}px`);
-    bit.style.setProperty('--rot', `${Math.round(Math.random() * 540)}deg`);
-    bit.style.left = `${35 + Math.random() * 30}%`; bit.style.top = `${35 + Math.random() * 20}%`;
-    wrap.appendChild(bit);
-  }
-  document.body.appendChild(wrap); setTimeout(() => wrap.remove(), 850);
-}
-
-function escapeHtml(s) { return String(s).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
+const socket=io(); const $=s=>document.querySelector(s);
+let room=null,myId=null,selectedDifficulty=100,selectedMode='first5',selectedPlayStyle='duel',quickSearching=false,timerRAF=null,countdownRAF=null,lastEndKey='';
+const lobby=$('#lobby'),game=$('#game'),daily=$('#daily');
+const tokenKey='nhTokenV5',profileKey='nhProfileV5',roomKey='nhRoomV5';
+let playerToken=localStorage.getItem(tokenKey)||((crypto.randomUUID&&crypto.randomUUID())||`${Date.now()}-${Math.random()}`); localStorage.setItem(tokenKey,playerToken);
+let profile=loadProfile();
+function loadProfile(){try{return Object.assign({xp:0,wins:0,losses:0,games:0,finds:0,bestMs:null,dailyBest:{}},JSON.parse(localStorage.getItem(profileKey)||'{}'))}catch{return {xp:0,wins:0,losses:0,games:0,finds:0,bestMs:null,dailyBest:{}}}}
+function saveProfile(){localStorage.setItem(profileKey,JSON.stringify(profile));renderProfile()}
+const ranks=[['Bronze',0],['Silver',500],['Gold',1200],['Platinum',2200],['Diamond',3500],['Master',5200],['Legend',7500]];
+function rankInfo(xp=profile.xp){let i=0;for(let n=0;n<ranks.length;n++)if(xp>=ranks[n][1])i=n;const cur=ranks[i],next=ranks[i+1];return {name:cur[0],floor:cur[1],next:next?.[1]||cur[1]+2500}}
+function renderProfile(){const r=rankInfo(),pct=Math.min(100,Math.max(0,(profile.xp-r.floor)/(r.next-r.floor)*100));$('#profileCard').innerHTML=`<div><div class="profileRank">${r.name} · ${profile.xp} XP</div><div class="playerStats">${profile.wins}W · ${profile.losses}L · ${profile.games} games · ${profile.bestMs?`best ${(profile.bestMs/1000).toFixed(2)}s`:'no best yet'}</div><div class="xpBar"><i style="width:${pct}%"></i></div></div><strong>${Math.round(pct)}%</strong>`}
+renderProfile(); $('#nameInput').value=localStorage.getItem('nhName')||'';
+function name(){const n=$('#nameInput').value.trim().slice(0,18)||'Player';localStorage.setItem('nhName',n);return n}
+function toast(t){const e=$('#toast');e.textContent=t;e.classList.add('show');clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove('show'),1800)}
+function vibrate(p=25){try{navigator.vibrate?.(p)}catch{}} function flash(k){const e=$('#flash');e.className=`flash ${k} show`;setTimeout(()=>e.classList.remove('show'),220)}
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]))}
+function setView(v){lobby.classList.toggle('hidden',v!=='lobby');game.classList.toggle('hidden',v!=='game');daily.classList.toggle('hidden',v!=='daily')}
+function showFriend(){quickSearching=false;socket.emit('quick:cancel');$('#quickPanel').classList.add('hidden');$('#friendPanel').classList.remove('hidden')}
+$('#playFriendBtn').onclick=showFriend;
+$('#quickPlayBtn').onclick=()=>{const n=name();$('#friendPanel').classList.add('hidden');$('#quickPanel').classList.remove('hidden');$('#lobbyMsg').textContent='';quickSearching=true;socket.emit('quick:join',{name:n,playerToken},res=>{if(!res?.ok){quickSearching=false;$('#quickPanel').classList.add('hidden');$('#lobbyMsg').textContent=res?.error||'Could not search.'}})};
+$('#cancelQuickBtn').onclick=()=>{quickSearching=false;socket.emit('quick:cancel');$('#quickPanel').classList.add('hidden')};
+socket.on('quick:matched',data=>{quickSearching=false;$('#quickPanel').classList.add('hidden');enterRoom(data);toast('Opponent found!')});
+for(const [id,key,setter] of [['difficultyPicker','difficulty',v=>selectedDifficulty=+v],['stylePicker','style',v=>selectedPlayStyle=v],['modePicker','mode',v=>selectedMode=v]]){$(`#${id}`).onclick=e=>{const b=e.target.closest('button[data-value]');if(!b)return;[...$(`#${id}`).querySelectorAll('button')].forEach(x=>x.classList.remove('selected'));b.classList.add('selected');setter(b.dataset.value)}}
+$('#createBtn').onclick=()=>socket.emit('room:create',{name:name(),difficulty:selectedDifficulty,mode:selectedMode,playStyle:selectedPlayStyle,playerToken},res=>res?.ok?enterRoom(res):$('#lobbyMsg').textContent=res?.error||'Could not create room');
+$('#joinBtn').onclick=()=>socket.emit('room:join',{code:$('#codeInput').value,name:name(),playerToken},res=>res?.ok?enterRoom(res):$('#lobbyMsg').textContent=res?.error||'Could not join');
+function enterRoom(data){room=data.room;myId=data.playerId;playerToken=data.playerToken||playerToken;localStorage.setItem(tokenKey,playerToken);localStorage.setItem(roomKey,room.code);setView('game');renderRoom()}
+socket.on('room:update',r=>{if(!room||r.code!==room.code)return;room=r;renderRoom()});
+socket.on('room:kicked',d=>{toast(d.message||'Removed');home()});socket.on('room:closed',d=>{toast(d.message||'Room closed');home()});
+socket.on('game:miss',({number})=>{const b=document.querySelector(`.num[data-n="${number}"]`);b?.classList.add('miss');setTimeout(()=>b?.classList.remove('miss'),260);flash('bad');vibrate([20,30,20])});
+socket.on('game:found',r=>{const b=document.querySelector(`.num[data-n="${r.number}"]`);b?.classList.add('hit');flash('good');vibrate([25,30,60]);toast(`${r.finderName} found ${r.number} in ${(r.elapsedMs/1000).toFixed(2)}s`)});
+socket.on('game:ended',d=>{room=d.room;renderRoom();showResult()});
+function renderRoom(){if(!room)return;$('#roomCode').textContent=room.code;$('#roundNum').textContent=room.round;const mode=room.mode==='first5'?['FIRST TO','5']:room.mode==='first10'?['FIRST TO','10']:['MATCH','2:00'];$('#modeLabel').textContent=mode[0];$('#modeValue').textContent=mode[1];document.documentElement.style.setProperty('--cols',room.difficulty<=50?8:room.difficulty<=100?10:12);$('#numberInput').max=room.difficulty;renderScore();renderBoard();renderState();renderTimer();renderCountdown();if(room.status==='ended')showResult()}
+function renderScore(){$('#scoreBar').innerHTML=room.players.map(p=>`<div class="playerCard ${p.id===myId?'you':''}"><div class="playerName">${esc(p.name)}${p.id===myId?' · YOU':''}${p.connected?'':' · offline'}</div><div class="score">${p.score}</div><div class="playerStats">${p.finds} finds · ${p.wrongTaps} misses${p.fastestFindMs?` · ${(p.fastestFindMs/1000).toFixed(2)}s best`:''}</div></div>`).join('')}
+function renderBoard(){const html=room.board.map((n,i)=>`<button class="num ${room.found.includes(n)?'found':''}" data-n="${n}" style="--rot:${((n*17+i*11)%19)-9}deg">${n}</button>`).join('');$('#board').innerHTML=html;$('#board').onclick=e=>{const b=e.target.closest('.num');if(!b||room.found.includes(+b.dataset.n))return;const n=+b.dataset.n;if(room.playStyle==='classic'&&room.currentCallerId===myId&&room.target===null){$('#numberInput').value=n;return}socket.emit('game:find',{number:n},()=>{})}}
+function renderState(){const waiting=room.players.length<2;$('#waitingControls').classList.toggle('hidden',!waiting);const classic=room.playStyle==='classic',caller=room.currentCallerId===myId;$('#callerControls').classList.toggle('hidden',waiting||!classic||!caller||room.status==='ended');$('#finderControls').classList.toggle('hidden',waiting||room.status==='ended'||(classic&&caller));$('#removePlayerBtn').classList.toggle('hidden',room.hostId!==myId||room.players.length<2);if(waiting){$('#turnText').textContent='WAITING FOR PLAYER';$('#targetText').textContent='Invite a friend'}else if(room.status==='ended'){ $('#turnText').textContent='MATCH COMPLETE';$('#targetText').textContent='See results'}else if(room.target!=null){$('#turnText').textContent=room.playStyle==='duel'?'BOTH PLAYERS HUNT':'FIND IT';$('#targetText').textContent=`FIND ${room.target}`}else{$('#turnText').textContent=room.playStyle==='duel'?'NEXT ROUND':'YOUR MOVE';$('#targetText').textContent=classic?(caller?'Call a number':'Waiting for caller'):'Get ready'}}
+function renderTimer(){cancelAnimationFrame(timerRAF);const tick=()=>{if(!room)return;let remain=room.roundLimitMs||20000,label='READY';if(room.target!=null&&room.searchStartsAt){const now=Date.now();if(now<room.searchStartsAt){remain=room.roundLimitMs;label='GET READY'}else{remain=Math.max(0,room.searchStartsAt+room.roundLimitMs-now);label='HUNT'}}else if(room.mode==='timed'&&room.matchEndsAt){remain=Math.max(0,room.matchEndsAt-Date.now());label='MATCH'}$('#timerLabel').textContent=label;$('#timerText').textContent=(remain/1000).toFixed(1);$('#timerBar').style.width=`${Math.max(0,Math.min(100,remain/(room.roundLimitMs||20000)*100))}%`;timerRAF=requestAnimationFrame(tick)};tick()}
+function renderCountdown(){cancelAnimationFrame(countdownRAF);const ov=$('#countdown');if(!room?.countdownStartedAt||!room?.searchStartsAt){ov.classList.add('hidden');return}const tick=()=>{const left=room.searchStartsAt-Date.now();if(left<=0){ov.classList.add('hidden');return}ov.classList.remove('hidden');$('#countdownText').textContent=Math.ceil(left/1000);countdownRAF=requestAnimationFrame(tick)};tick()}
+$('#callBtn').onclick=()=>socket.emit('game:call',{number:+$('#numberInput').value},res=>{if(!res?.ok)$('#gameMsg').textContent=res?.error||'Could not call';else $('#numberInput').value=''});$('#randomBtn').onclick=()=>socket.emit('game:random',{},res=>{if(res?.ok)$('#numberInput').value=res.number;else $('#gameMsg').textContent=res?.error||'Could not pick'});
+function shareRoom(){if(!room)return;const u=new URL(location.href);u.searchParams.set('room',room.code);const text=`Join my Number Hunt room ${room.code}`;navigator.share?navigator.share({title:'Number Hunt',text,url:u.toString()}).catch(()=>{}):navigator.clipboard?.writeText(u.toString()).then(()=>toast('Invite link copied'))} $('#inviteBtn').onclick=shareRoom;$('#roomCode').onclick=shareRoom;
+$('#leaveGameBtn').onclick=()=>{if(!room)return home();if(!confirm(room.hostId===myId?'Leave and close this room?':'Leave this game?'))return;socket.emit('room:leave',{},()=>home())};$('#removePlayerBtn').onclick=()=>{const p=room?.players.find(x=>x.id!==myId);if(p&&confirm(`Remove ${p.name}?`))socket.emit('room:kick',{playerId:p.id},()=>{})};
+function awardMatchXP(){if(!room||room.status!=='ended')return 0;const key=`${room.code}:${room.endedAt}`;if(lastEndKey===key||localStorage.getItem('nhLastAward')===key)return 0;lastEndKey=key;localStorage.setItem('nhLastAward',key);const me=room.players.find(p=>p.id===myId);if(!me)return 0;const win=room.winnerId===myId,tie=!room.winnerId;let gained=(win?120:tie?70:45)+me.finds*10;profile.games++;if(win)profile.wins++;else if(!tie)profile.losses++;profile.finds+=me.finds;if(me.fastestFindMs)profile.bestMs=profile.bestMs?Math.min(profile.bestMs,me.fastestFindMs):me.fastestFindMs;profile.xp+=gained;saveProfile();return gained}
+function showResult(){if(!room||room.status!=='ended')return;const gained=awardMatchXP();const me=room.players.find(p=>p.id===myId),opp=room.players.find(p=>p.id!==myId),win=room.winnerId===myId,tie=!room.winnerId;$('#winnerTitle').textContent=tie?'Draw!':win?'You win!':`${opp?.name||'Opponent'} wins`;$('#winnerSubtitle').textContent=win?'Fast eyes. Nice work.':tie?'Couldn’t separate you two.':'Run it back.';$('#rankChange').textContent=gained?`+${gained} XP · ${rankInfo().name}`:`${rankInfo().name} · ${profile.xp} XP`;$('#finalStats').innerHTML=`<div class="statRow"><span>Your finds</span><strong>${me?.finds||0}</strong></div><div class="statRow"><span>Fastest find</span><strong>${me?.fastestFindMs?`${(me.fastestFindMs/1000).toFixed(2)}s`:'—'}</strong></div><div class="statRow"><span>Accuracy</span><strong>${me?.attempts?`${Math.round(me.finds/me.attempts*100)}%`:'—'}</strong></div>`;$('#resultModal').classList.remove('hidden')}
+$('#rematchBtn').onclick=()=>socket.emit('game:new',{difficulty:room.difficulty,mode:room.mode,playStyle:room.playStyle},res=>{if(res?.ok){$('#resultModal').classList.add('hidden');room=res.room;renderRoom()}});$('#homeBtn').onclick=()=>{socket.emit('room:leave',{},()=>{});home()};
+function home(){$('#resultModal').classList.add('hidden');room=null;myId=null;localStorage.removeItem(roomKey);setView('lobby');renderProfile()}
+// Daily challenge: deterministic by UTC date, 10 targets, local best and XP once per day.
+let d={active:false,board:[],targets:[],idx:0,start:0,targetStart:0,found:0,wrong:0,raf:null,date:''};
+function seedHash(str){let h=2166136261;for(const c of str){h^=c.charCodeAt(0);h=Math.imul(h,16777619)}return h>>>0}function rng(seed){return()=>{seed|=0;seed=seed+0x6D2B79F5|0;let t=Math.imul(seed^seed>>>15,1|seed);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+function dailyData(date){const r=rng(seedHash(`numberhunt-${date}`)),a=Array.from({length:100},(_,i)=>i+1);for(let i=a.length-1;i>0;i--){const j=Math.floor(r()*(i+1));[a[i],a[j]]=[a[j],a[i]]}const t=[];while(t.length<10){const n=1+Math.floor(r()*100);if(!t.includes(n))t.push(n)}return{board:a,targets:t}}
+$('#dailyBtn').onclick=startDaily;function startDaily(){name();const date=new Date().toISOString().slice(0,10),x=dailyData(date);d={active:true,board:x.board,targets:x.targets,idx:0,start:Date.now()+3000,targetStart:Date.now()+3000,found:0,wrong:0,raf:null,date};setView('daily');$('#dailyDate').textContent=date;$('#dailyBest').textContent=profile.dailyBest?.[date]?`${(profile.dailyBest[date]/1000).toFixed(1)}s`:'—';$('#dailyBoard').innerHTML=d.board.map((n,i)=>`<button class="num" data-n="${n}" style="--rot:${((n*13+i*7)%19)-9}deg">${n}</button>`).join('');$('#dailyTarget').textContent=d.targets[0];$('#dailyFound').textContent='0/10';$('#dailyXp').textContent='+0 XP';runDailyCountdown();runDailyTimer()}
+function runDailyCountdown(){const ov=$('#countdown');const tick=()=>{const left=d.start-Date.now();if(left<=0){ov.classList.add('hidden');return}ov.classList.remove('hidden');$('#countdownText').textContent=Math.ceil(left/1000);requestAnimationFrame(tick)};tick()}
+$('#dailyBoard').onclick=e=>{const b=e.target.closest('.num');if(!b||!d.active||Date.now()<d.start)return;const n=+b.dataset.n;if(n!==d.targets[d.idx]){d.wrong++;b.classList.add('miss');setTimeout(()=>b.classList.remove('miss'),250);flash('bad');vibrate([15,20,15]);return}b.classList.add('found','hit');d.found++;d.idx++;flash('good');vibrate(30);$('#dailyFound').textContent=`${d.found}/10`;if(d.idx>=10)return finishDaily();d.targetStart=Date.now();$('#dailyTarget').textContent=d.targets[d.idx]}
+function runDailyTimer(){cancelAnimationFrame(d.raf);const tick=()=>{if(!d.active)return;const now=Date.now(),elapsed=Math.max(0,now-d.start)+d.wrong*500;$('#dailyTimer').textContent=(elapsed/1000).toFixed(1);$('#dailyTimerBar').style.width=`${Math.max(5,100-(elapsed/90000*100))}%`;d.raf=requestAnimationFrame(tick)};tick()}
+function finishDaily(){d.active=false;cancelAnimationFrame(d.raf);const total=Math.max(0,Date.now()-d.start)+d.wrong*500;const old=profile.dailyBest?.[d.date]||null;if(!profile.dailyBest)profile.dailyBest={};if(!old||total<old)profile.dailyBest[d.date]=total;const awardKey=`nhDailyAward-${d.date}`;let gained=0;if(!localStorage.getItem(awardKey)){gained=150;profile.xp+=gained;localStorage.setItem(awardKey,'1')}saveProfile();$('#dailyXp').textContent=`+${gained} XP`;$('#dailyResultTitle').textContent=old&&total>=old?'Challenge complete':'New daily best!';$('#dailyResultText').textContent=`${(total/1000).toFixed(1)}s · ${d.wrong} wrong taps${gained?` · +${gained} XP`:''}`;$('#dailyModal').classList.remove('hidden')}
+$('#dailyAgainBtn').onclick=()=>{$('#dailyModal').classList.add('hidden');startDaily()};$('#dailyHomeBtn').onclick=()=>{$('#dailyModal').classList.add('hidden');home()};$('#dailyBackBtn').onclick=()=>{d.active=false;cancelAnimationFrame(d.raf);home()};
+const roomParam=new URL(location.href).searchParams.get('room');if(roomParam){$('#codeInput').value=roomParam.toUpperCase();showFriend()}
+socket.on('connect',()=>{const code=localStorage.getItem(roomKey);if(code&&!room)socket.emit('room:resume',{code,playerToken},res=>{if(res?.ok)enterRoom(res);else localStorage.removeItem(roomKey)})});

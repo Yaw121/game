@@ -1,15 +1,1 @@
-{
-  "name": "number-hunt-online",
-  "version": "4.0.0",
-  "private": true,
-  "description": "Mobile-first two-player number hunt with Classic and Speed Duel modes, live multiplayer, stats, reconnect protection and local player records.",
-  "main": "server.js",
-  "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js"
-  },
-  "dependencies": {
-    "express": "^4.21.2",
-    "socket.io": "^4.8.1"
-  }
-}
+{"name":"number-hunt-online","version":"5.0.0","private":true,"description":"Competitive mobile Number Hunt with Quick Play matchmaking, private friend rooms, Daily Challenge, XP/ranks and Speed Duel.","main":"server.js","scripts":{"start":"node server.js","dev":"node server.js"},"dependencies":{"express":"^4.21.2","socket.io":"^4.8.1"}}
