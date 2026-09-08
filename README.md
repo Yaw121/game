@@ -1,32 +1,25 @@
-# Number Hunt Online v3
+# Number Hunt Online v4
 
-Two-player real-time scrambled-number hunt optimized for phones.
+A mobile-first two-player visual search game powered by Node.js, Express and Socket.IO.
 
-## New in v3
-- Match modes: First to 5, First to 10, and 2-minute timed match
-- 3…2…1…GO countdown before the finder timer starts
-- Winner screen and one-tap rematch
-- Post-match stats: finds, fastest find, average find time, accuracy, score
-- Random-number button for the caller
-- Live “found in X seconds” feedback
-- Personal-best tracking in the browser
-- Reconnect protection: a player can refresh, lock their phone, or briefly lose signal and reclaim their seat for 90 seconds
-- One-tap invite link with the room code embedded
-- Sticky mobile HUD, scoreboard, and controls for better phone play
-- Existing v2 scoring, penalties, vibration, sound, and difficulty modes retained
+## New in v4
+- **Speed Duel:** both players receive the same target and race to tap it first.
+- Classic caller/finder mode is still available.
+- More chaotic, paper-like number placement while keeping touch targets usable.
+- Stronger correct/wrong animations, haptics and sound cues.
+- Local player record card: games, wins, win rate, finds, accuracy and personal best are saved in the browser.
+- Existing match formats: First to 5, First to 10 and 2-minute match.
+- Invite links, rematches, post-match stats, leave/kick controls and 90-second reconnect protection.
+
+## Run locally
+```bash
+npm install
+npm start
+```
+Open http://localhost:3000.
 
 ## Deploy on Render
-- Runtime: Node
-- Build command: `npm install`
-- Start command: `npm start`
-- Root directory: leave blank
+Build command: `npm install`
+Start command: `npm start`
 
-Replace the six repository-root files with this v3 set, commit, then use Render → Manual Deploy → Deploy latest commit.
-
-
-## v3.1 room controls
-- Any player can use **Leave Game** to leave immediately.
-- If the host leaves, the room closes for everyone.
-- The host gets a **Remove Player** button whenever an opponent is in the room.
-- Removed players are returned to the lobby and the host can invite someone else into the same room.
-- Refreshes and short connection drops still use the 90-second reconnect protection; only the explicit Leave Game action removes the seat immediately.
+Keep all six files at the repository root.

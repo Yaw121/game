@@ -4,6 +4,9 @@ let myId = null;
 let missNumber = null;
 let selectedDifficulty = 100;
 let selectedMode = 'first5';
+let selectedPlayStyle = 'classic';
+let lastFoundNumber = null;
+let lastStatsSavedStamp = null;
 let rafId = null;
 let countdownRaf = null;
 let lastEndedStamp = null;
@@ -30,6 +33,8 @@ function modeName(mode) {
   if (mode === 'first10') return 'First to 10';
   return '2 Minute Match';
 }
+
+function styleName(style) { return style === 'duel' ? '⚡ Speed Duel' : 'Classic'; }
 
 function modeShort(mode) {
   if (mode === 'first5') return ['FIRST TO', '5'];
@@ -66,6 +71,40 @@ function showToast(text) {
 }
 function nameValue() { return ($('#nameInput').value.trim() || 'Player').slice(0, 18); }
 
+function getProfile() {
+  const base = { games: 0, wins: 0, losses: 0, ties: 0, finds: 0, attempts: 0, wrongTaps: 0, totalFindMs: 0 };
+  try { return { ...base, ...JSON.parse(localStorage.getItem('numberHuntProfileV4') || '{}') }; }
+  catch { return base; }
+}
+function renderProfile() {
+  const p = getProfile();
+  const winRate = p.games ? Math.round((p.wins / p.games) * 100) : 0;
+  const accuracy = p.attempts ? Math.round((p.finds / p.attempts) * 100) : 0;
+  const avg = p.finds ? `${(p.totalFindMs / p.finds / 1000).toFixed(2)}s` : '—';
+  const best = Number(localStorage.getItem('numberHuntBestMs'));
+  $('#profileCard').innerHTML = `<div class="profileHead"><span>YOUR RECORD</span><strong>${p.wins}W · ${p.losses}L${p.ties ? ` · ${p.ties}T` : ''}</strong></div><div class="profileStats"><div><span>GAMES</span><strong>${p.games}</strong></div><div><span>WIN RATE</span><strong>${winRate}%</strong></div><div><span>BEST</span><strong>${best > 0 ? `${(best/1000).toFixed(2)}s` : '—'}</strong></div><div><span>AVG FIND</span><strong>${avg}</strong></div><div><span>ACCURACY</span><strong>${accuracy}%</strong></div></div>`;
+}
+function saveMatchStatsOnce() {
+  if (!room || room.status !== 'ended') return;
+  const stamp = `${room.code}:${room.endedAt || room.endedReason}:${room.round}:${room.winnerId}`;
+  if (stamp === lastStatsSavedStamp) return;
+  const me = room.players.find(p => p.id === myId);
+  if (!me) return;
+  lastStatsSavedStamp = stamp;
+  const p = getProfile();
+  p.games += 1;
+  if (!room.winnerId) p.ties += 1;
+  else if (room.winnerId === myId) p.wins += 1;
+  else p.losses += 1;
+  p.finds += me.finds || 0;
+  p.attempts += me.attempts || 0;
+  p.wrongTaps += me.wrongTaps || 0;
+  p.totalFindMs += me.totalFindMs || 0;
+  localStorage.setItem('numberHuntProfileV4', JSON.stringify(p));
+  renderProfile();
+}
+renderProfile();
+
 socket.on('connect', () => {
   const savedCode = localStorage.getItem(roomCodeKey);
   if (savedCode && playerToken && !room) {
@@ -97,10 +136,16 @@ $('#modePicker').addEventListener('click', e => {
   document.querySelectorAll('.modeBtn').forEach(b => b.classList.toggle('selected', b === btn));
   vibrate(10);
 });
+$('#stylePicker').addEventListener('click', e => {
+  const btn = e.target.closest('.styleBtn'); if (!btn) return;
+  selectedPlayStyle = btn.dataset.value;
+  document.querySelectorAll('.styleBtn').forEach(b => b.classList.toggle('selected', b === btn));
+  vibrate(10);
+});
 
 $('#createBtn').onclick = () => {
   lobbyMsg.textContent = '';
-  socket.emit('room:create', { name: nameValue(), difficulty: selectedDifficulty, mode: selectedMode, playerToken }, res => {
+  socket.emit('room:create', { name: nameValue(), difficulty: selectedDifficulty, mode: selectedMode, playStyle: selectedPlayStyle, playerToken }, res => {
     if (!res?.ok) return lobbyMsg.textContent = res?.error || 'Could not create room.';
     myId = res.playerId; playerToken = res.playerToken || playerToken; room = res.room;
     localStorage.setItem(playerTokenKey, playerToken); localStorage.setItem(roomCodeKey, room.code);
@@ -133,11 +178,13 @@ function returnToLobby(message = '') {
   myId = null;
   missNumber = null;
   lastEndedStamp = null;
+  lastStatsSavedStamp = null;
   $('#resultModal').classList.add('hidden');
   $('#countdown').classList.add('hidden');
   game.classList.add('hidden');
   lobby.classList.remove('hidden');
   lobbyMsg.textContent = message;
+  renderProfile();
 }
 
 socket.on('room:kicked', ({ message } = {}) => {
@@ -153,30 +200,32 @@ socket.on('room:closed', ({ message } = {}) => {
 socket.on('room:update', data => {
   room = data;
   render();
-  if (room.status === 'ended') showResultsOnce();
+  if (room.status === 'ended') { saveMatchStatsOnce(); showResultsOnce(); }
 });
-socket.on('game:called', () => { vibrate([25,35,25]); renderCountdown(); renderTimer(); });
+socket.on('game:called', ({ duel } = {}) => { vibrate(duel ? [20,25,20,25,35] : [25,35,25]); renderCountdown(); renderTimer(); });
 socket.on('game:found', ({ number, finderId, finderName, elapsedMs, points }) => {
   const secs = (elapsedMs / 1000).toFixed(2);
+  lastFoundNumber = number; renderBoard(); setTimeout(() => { if (lastFoundNumber === number) { lastFoundNumber = null; renderBoard(); } }, 700);
   if (finderId === myId) {
-    showToast(`⚡ Found ${number} in ${secs}s  +${points}`); vibrate([30,35,60]); beep('good'); flash('good'); savePersonalBest(elapsedMs);
-  } else showToast(`⚡ ${finderName || 'Opponent'} found ${number} in ${secs}s`);
+    showToast(`${room?.playStyle === 'duel' ? '🏁' : '⚡'} Found ${number} in ${secs}s  +${points}`); vibrate([30,30,55,30,90]); beep('good'); flash('good'); celebrate(); savePersonalBest(elapsedMs);
+  } else { showToast(`${room?.playStyle === 'duel' ? '🏁' : '⚡'} ${finderName || 'Opponent'} got ${number} in ${secs}s`); vibrate(18); }
 });
-socket.on('game:timeout', ({ number, finderId }) => {
-  if (finderId === myId) { showToast(`Time! ${number} was the target. −10`); vibrate([80,60,80]); beep('bad'); flash('bad'); }
+socket.on('game:timeout', ({ number, finderId, duel }) => {
+  if (duel) { showToast(`Time! Nobody found ${number}. Both −10`); vibrate([70,50,70]); beep('bad'); flash('bad'); }
+  else if (finderId === myId) { showToast(`Time! ${number} was the target. −10`); vibrate([80,60,80]); beep('bad'); flash('bad'); }
   else showToast(`Time! ${number} wasn't found.`);
 });
 socket.on('game:miss', ({ number, penalty }) => {
   missNumber = number; renderBoard(); showToast(`Wrong number −${penalty}`); vibrate(60); beep('bad'); flash('bad');
   setTimeout(() => { missNumber = null; renderBoard(); }, 430);
 });
-socket.on('game:rematch', () => { $('#resultModal').classList.add('hidden'); lastEndedStamp = null; showToast('Rematch started'); });
+socket.on('game:rematch', () => { $('#resultModal').classList.add('hidden'); lastEndedStamp = null; lastStatsSavedStamp = null; showToast('Rematch started'); });
 socket.on('game:ended', data => { if (data?.room) room = data.room; render(); showResultsOnce(true); });
 
 function shareRoom() {
   if (!room) return;
   const url = new URL(location.href); url.searchParams.set('room', room.code);
-  const shareText = `Join my Number Hunt room ${room.code} — ${modeName(room.mode)}.`;
+  const shareText = `Join my Number Hunt room ${room.code} — ${styleName(room.playStyle)}, ${modeName(room.mode)}.`;
   if (navigator.share) {
     navigator.share({ title: 'Number Hunt', text: shareText, url: url.toString() }).catch(() => {});
   } else {
@@ -235,7 +284,7 @@ $('#randomBtn').onclick = () => {
 $('#rematchBtn').onclick = startRematch;
 function startRematch() {
   if (!room) return;
-  socket.emit('game:new', { difficulty: room.difficulty, mode: room.mode }, res => {
+  socket.emit('game:new', { difficulty: room.difficulty, mode: room.mode, playStyle: room.playStyle }, res => {
     if (!res?.ok) gameMsg.textContent = res?.error || 'Could not start rematch.';
     else $('#resultModal').classList.add('hidden');
   });
@@ -245,6 +294,7 @@ $('#closeStatsBtn').onclick = () => $('#resultModal').classList.add('hidden');
 function render() {
   if (!room) return;
   $('#roomCode').textContent = room.code;
+  document.body.classList.toggle('duelMode', room.playStyle === 'duel');
   $('#roundNum').textContent = room.round;
   const [modeLabel, modeValue] = modeShort(room.mode); $('#modeLabel').textContent = modeLabel; $('#modeValue').textContent = modeValue;
   $('#numberInput').max = room.difficulty; $('#numberInput').placeholder = `1–${room.difficulty}`;
@@ -256,7 +306,7 @@ function renderScore() {
   $('#scoreBar').innerHTML = room.players.map(p => {
     const avg = p.finds ? `${(p.totalFindMs / p.finds / 1000).toFixed(2)}s avg` : '— avg';
     const fast = p.fastestFindMs != null ? `${(p.fastestFindMs / 1000).toFixed(2)}s best` : '— best';
-    return `<div class="playerCard ${p.id === room.currentCallerId ? 'active' : ''} ${p.connected ? '' : 'offline'}">
+    return `<div class="playerCard ${room.playStyle === 'classic' && p.id === room.currentCallerId ? 'active' : ''} ${p.connected ? '' : 'offline'}">
       <div class="playerMain"><span class="playerName">${escapeHtml(p.name)} ${p.id === myId ? '<em>YOU</em>' : ''}${p.connected ? '' : ' · offline'}</span><span class="playerStats">${p.finds} finds · ${avg} · ${fast} · ${p.wrongTaps} misses</span></div>
       <span class="score">${p.score}</span>
     </div>`;
@@ -278,9 +328,19 @@ function renderStatus() {
   if (room.status === 'ended') {
     $('#turnText').textContent = 'Match complete'; $('#targetText').textContent = 'View results or start a rematch'; return;
   }
-  if (waiting) { $('#turnText').textContent = 'Waiting for Player 2…'; $('#targetText').textContent = 'Share the room code'; return; }
+  if (waiting) { $('#turnText').textContent = 'Waiting for Player 2…'; $('#targetText').textContent = `${styleName(room.playStyle)} · Share the room code`; return; }
   if (someoneOffline) { $('#turnText').textContent = 'Opponent reconnecting…'; $('#targetText').textContent = 'Their seat is being held'; return; }
 
+  if (room.playStyle === 'duel') {
+    $('#finderControls').classList.remove('hidden');
+    const inCountdown = room.target !== null && Date.now() < room.searchStartsAt;
+    $('#finderControls strong').textContent = room.target === null ? 'Get ready for the next target.' : inCountdown ? 'Both players: get ready…' : `FIND ${room.target} — beat them to it!`;
+    $('#turnText').textContent = room.target === null ? '⚡ SPEED DUEL' : inCountdown ? 'BOTH GET READY' : `FIND ${room.target}`;
+    $('#targetText').textContent = room.target === null ? 'Same target. First correct tap wins the round.' : inCountdown ? 'The number unlocks at GO!' : 'First player to tap it scores';
+    return;
+  }
+
+  $('#finderControls strong').textContent = 'Find the called number and tap it.';
   if (iAmCaller) {
     $('#callerControls').classList.toggle('hidden', room.target !== null);
     $('#turnText').textContent = room.target === null ? 'Your turn to call' : 'They are searching…';
@@ -293,20 +353,40 @@ function renderStatus() {
   }
 }
 
+function chaos(n, idx, salt) {
+  let x = (n * 2654435761 + idx * 1597334677 + salt * 1013904223) >>> 0;
+  x ^= x >>> 16; x = Math.imul(x, 2246822519) >>> 0; x ^= x >>> 13;
+  return (x >>> 0) / 4294967295;
+}
 function renderBoard() {
   if (!room) return;
   const found = new Set(room.found); board.innerHTML = '';
   room.board.forEach((n, idx) => {
     const btn = document.createElement('button'); btn.className = 'num';
-    if (found.has(n)) btn.classList.add('found'); if (missNumber === n) btn.classList.add('miss');
-    const rotation = ((idx * 17) % 17) - 8, dx = ((idx * 11) % 7) - 3, dy = ((idx * 13) % 7) - 3;
-    btn.style.setProperty('--r', `${rotation}deg`); btn.style.setProperty('--dx', `${dx}px`); btn.style.setProperty('--dy', `${dy}px`);
+    if (found.has(n)) btn.classList.add('found');
+    if (missNumber === n) btn.classList.add('miss');
+    if (lastFoundNumber === n) btn.classList.add('justFound');
+    const rotation = Math.round((chaos(n, idx, 1) * 30) - 15);
+    const dx = Math.round((chaos(n, idx, 2) * 10) - 5);
+    const dy = Math.round((chaos(n, idx, 3) * 10) - 5);
+    const scale = (0.84 + chaos(n, idx, 4) * 0.30).toFixed(2);
+    const weight = chaos(n, idx, 5) > .72 ? 800 : 950;
+    btn.style.setProperty('--r', `${rotation}deg`); btn.style.setProperty('--dx', `${dx}px`); btn.style.setProperty('--dy', `${dy}px`); btn.style.setProperty('--s', scale); btn.style.fontWeight = weight;
     btn.textContent = n; btn.disabled = found.has(n); btn.onclick = () => onNumberTap(n); board.appendChild(btn);
   });
 }
 
 function onNumberTap(n) {
   if (!room || !room.gameStarted || room.status !== 'playing') return;
+  if (room.playStyle === 'duel') {
+    if (room.target === null) return showToast('Next target coming…');
+    if (Date.now() < room.searchStartsAt) return showToast('Wait for GO!');
+    gameMsg.textContent = '';
+    socket.emit('game:find', { number: n }, res => {
+      if (!res?.ok && !['Not the called number.','Time ran out.','Wait for GO!','Get ready for the next number.'].includes(res?.error)) gameMsg.textContent = res?.error || '';
+    });
+    return;
+  }
   const iAmCaller = room.currentCallerId === myId;
   if (iAmCaller && room.target === null) { $('#numberInput').value = n; vibrate(8); return; }
   if (!iAmCaller && room.target !== null) {
@@ -321,7 +401,7 @@ function onNumberTap(n) {
 function renderCountdown() {
   cancelAnimationFrame(countdownRaf);
   const overlay = $('#countdown'), text = $('#countdownText');
-  if (!room?.target || !room.searchStartsAt || room.currentCallerId === myId || Date.now() >= room.searchStartsAt) {
+  if (!room?.target || !room.searchStartsAt || (room.playStyle === 'classic' && room.currentCallerId === myId) || Date.now() >= room.searchStartsAt) {
     overlay.classList.add('hidden'); return;
   }
   overlay.classList.remove('hidden');
@@ -330,6 +410,7 @@ function renderCountdown() {
     const left = room.searchStartsAt - Date.now();
     if (left <= 0) {
       text.textContent = 'GO!'; overlay.classList.add('go'); beep('go'); vibrate([20,20,35]);
+      renderStatus();
       setTimeout(() => { overlay.classList.add('hidden'); overlay.classList.remove('go'); }, 420); return;
     }
     text.textContent = Math.max(1, Math.ceil(left / 1000));
@@ -363,6 +444,8 @@ function showResultsOnce(force = false) {
   if (!room || room.status !== 'ended') return;
   const stamp = `${room.code}:${room.endedReason}:${room.round}:${room.winnerId}`;
   if (!force && stamp === lastEndedStamp) return; lastEndedStamp = stamp;
+  saveMatchStatsOnce();
+  $('#resultStyleBadge').textContent = `${styleName(room.playStyle)} · ${modeName(room.mode)}`;
   const winner = room.players.find(p => p.id === room.winnerId);
   $('#winnerTitle').textContent = room.winnerId ? (room.winnerId === myId ? 'You win! 🏆' : `${winner?.name || 'Opponent'} wins!`) : 'It’s a tie!';
   $('#winnerSubtitle').textContent = room.endedReason === 'time' ? 'The 2-minute clock expired.' : room.endedReason?.startsWith('first-to-') ? `${modeName(room.mode)} completed.` : 'Board complete.';
@@ -381,6 +464,19 @@ function showResultsOnce(force = false) {
 function savePersonalBest(ms) {
   const key = 'numberHuntBestMs'; const prev = Number(localStorage.getItem(key));
   if (!prev || ms < prev) { localStorage.setItem(key, String(ms)); showToast(`🏅 New personal best: ${(ms / 1000).toFixed(2)}s`); }
+}
+
+function celebrate() {
+  const wrap = document.createElement('div'); wrap.className = 'celebration';
+  for (let i = 0; i < 14; i++) {
+    const bit = document.createElement('i');
+    bit.style.setProperty('--x', `${(Math.random() * 180 - 90).toFixed(0)}px`);
+    bit.style.setProperty('--y', `${(-80 - Math.random() * 160).toFixed(0)}px`);
+    bit.style.setProperty('--rot', `${Math.round(Math.random() * 540)}deg`);
+    bit.style.left = `${35 + Math.random() * 30}%`; bit.style.top = `${35 + Math.random() * 20}%`;
+    wrap.appendChild(bit);
+  }
+  document.body.appendChild(wrap); setTimeout(() => wrap.remove(), 850);
 }
 
 function escapeHtml(s) { return String(s).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }

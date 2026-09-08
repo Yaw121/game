@@ -14,7 +14,9 @@
     <section id="lobby" class="panel lobby">
       <div class="brand">NUMBER HUNT</div>
       <h1>Find it fast.</h1>
-      <p class="sub">Call a number. Your opponent gets a 3-second countdown, then 20 seconds to spot it.</p>
+      <p class="sub">Play Classic or race head-to-head in Speed Duel. Same scrambled board, same target, fastest eyes win.</p>
+
+      <section id="profileCard" class="profileCard"></section>
 
       <label>Your name</label>
       <input id="nameInput" maxlength="18" placeholder="Player name" autocomplete="nickname" />
@@ -24,6 +26,13 @@
         <button class="choiceBtn" data-value="50">Easy<span>1–50</span></button>
         <button class="choiceBtn selected" data-value="100">Normal<span>1–100</span></button>
         <button class="choiceBtn" data-value="150">Hard<span>1–150</span></button>
+      </div>
+
+
+      <label>Game style</label>
+      <div class="stylePicker" id="stylePicker">
+        <button class="styleBtn selected" data-value="classic">Classic<span>Call & find</span></button>
+        <button class="styleBtn" data-value="duel">⚡ Speed Duel<span>Both find the same number</span></button>
       </div>
 
       <label>Match mode</label>
@@ -102,6 +111,7 @@
   <div id="resultModal" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modalCard">
       <div class="brand">MATCH COMPLETE</div>
+      <div id="resultStyleBadge" class="resultStyleBadge"></div>
       <h2 id="winnerTitle">Winner!</h2>
       <p id="winnerSubtitle" class="sub"></p>
       <div id="finalStats" class="finalStats"></div>

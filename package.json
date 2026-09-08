@@ -1,8 +1,8 @@
 {
   "name": "number-hunt-online",
-  "version": "3.0.0",
+  "version": "4.0.0",
   "private": true,
-  "description": "Two-player online scrambled-number hunt with match modes, countdowns, stats, reconnect protection and mobile-first controls.",
+  "description": "Mobile-first two-player number hunt with Classic and Speed Duel modes, live multiplayer, stats, reconnect protection and local player records.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
