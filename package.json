@@ -1,8 +1,8 @@
 {
   "name": "number-hunt-online",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "Two-player online scrambled-number hunt game with live synchronized circles.",
+  "description": "Two-player online scrambled-number hunt game with synchronized rounds, timing, scores, penalties and mobile-first controls.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
