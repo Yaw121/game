@@ -1,6 +1,7 @@
 const express = require('express');
 const http = require('http');
 const path = require('path');
+const crypto = require('crypto');
 const { Server } = require('socket.io');
 
 const app = express();
@@ -12,7 +13,12 @@ app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 
 const rooms = new Map();
 const ALLOWED_DIFFICULTIES = new Set([50, 100, 150]);
+const ALLOWED_MODES = new Set(['first5', 'first10', 'timed']);
 const ROUND_LIMIT_MS = 20000;
+const COUNTDOWN_MS = 3000;
+const TIMED_MATCH_MS = 120000;
+const RECONNECT_GRACE_MS = 90000;
+const EMPTY_ROOM_TTL_MS = 10 * 60 * 1000;
 
 function makeCode() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -21,6 +27,10 @@ function makeCode() {
     code = Array.from({ length: 5 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join('');
   } while (rooms.has(code));
   return code;
+}
+
+function makePlayerId() {
+  return `p_${crypto.randomBytes(6).toString('hex')}`;
 }
 
 function shuffledBoard(maxNumber) {
@@ -32,12 +42,43 @@ function shuffledBoard(maxNumber) {
   return nums;
 }
 
+function sanitizeName(name) {
+  const cleaned = String(name || 'Player').trim().replace(/[<>]/g, '').slice(0, 18);
+  return cleaned || 'Player';
+}
+
+function modeTarget(mode) {
+  if (mode === 'first5') return 5;
+  if (mode === 'first10') return 10;
+  return null;
+}
+
+function findPlayerByToken(room, token) {
+  return room.players.find(p => p.token === token);
+}
+
+function findPlayer(room, playerId) {
+  return room.players.find(p => p.id === playerId);
+}
+
+function getRoomForSocket(socket) {
+  return rooms.get(socket.data.roomCode);
+}
+
+function getPlayerForSocket(socket, room) {
+  return room?.players.find(p => p.id === socket.data.playerId);
+}
+
+function roomReady(room) {
+  return room.players.length === 2 && room.players.every(p => p.connected);
+}
+
 function publicRoom(room) {
-  const now = Date.now();
-  const elapsedMs = room.target && room.roundStartedAt ? Math.min(now - room.roundStartedAt, ROUND_LIMIT_MS) : 0;
   return {
     code: room.code,
     difficulty: room.difficulty,
+    mode: room.mode,
+    modeTarget: modeTarget(room.mode),
     board: room.board,
     found: room.found,
     players: room.players.map(p => ({
@@ -46,16 +87,28 @@ function publicRoom(room) {
       score: p.score,
       finds: p.finds,
       totalFindMs: p.totalFindMs,
-      wrongTaps: p.wrongTaps
+      fastestFindMs: p.fastestFindMs,
+      wrongTaps: p.wrongTaps,
+      attempts: p.attempts,
+      connected: p.connected
     })),
     currentCallerId: room.currentCallerId,
     target: room.target,
     round: room.round,
     gameStarted: room.players.length === 2,
-    roundStartedAt: room.roundStartedAt,
+    bothConnected: roomReady(room),
+    countdownStartedAt: room.countdownStartedAt,
+    searchStartsAt: room.searchStartsAt,
     roundLimitMs: ROUND_LIMIT_MS,
-    elapsedMs,
-    lastResult: room.lastResult || null
+    countdownMs: COUNTDOWN_MS,
+    matchStartedAt: room.matchStartedAt,
+    matchLimitMs: room.mode === 'timed' ? TIMED_MATCH_MS : null,
+    matchEndsAt: room.mode === 'timed' && room.matchStartedAt ? room.matchStartedAt + TIMED_MATCH_MS : null,
+    lastResult: room.lastResult || null,
+    status: room.status,
+    winnerId: room.winnerId,
+    endedReason: room.endedReason,
+    createdAt: room.createdAt
   };
 }
 
@@ -63,21 +116,80 @@ function emitRoom(room) {
   io.to(room.code).emit('room:update', publicRoom(room));
 }
 
-function getRoomForSocket(socket) {
-  return rooms.get(socket.data.roomCode);
+function resetPlayerStats(player) {
+  player.score = 0;
+  player.finds = 0;
+  player.totalFindMs = 0;
+  player.fastestFindMs = null;
+  player.wrongTaps = 0;
+  player.attempts = 0;
 }
 
-function sanitizeName(name) {
-  const cleaned = String(name || 'Player').trim().replace(/[<>]/g, '').slice(0, 18);
-  return cleaned || 'Player';
+function chooseWinner(room) {
+  if (!room.players.length) return null;
+  const sorted = [...room.players].sort((a, b) => {
+    if (b.finds !== a.finds) return b.finds - a.finds;
+    if (b.score !== a.score) return b.score - a.score;
+    const aAvg = a.finds ? a.totalFindMs / a.finds : Infinity;
+    const bAvg = b.finds ? b.totalFindMs / b.finds : Infinity;
+    return aAvg - bAvg;
+  });
+  if (sorted.length < 2) return sorted[0]?.id || null;
+  const a = sorted[0], b = sorted[1];
+  const aAvg = a.finds ? a.totalFindMs / a.finds : Infinity;
+  const bAvg = b.finds ? b.totalFindMs / b.finds : Infinity;
+  const exactTie = a.finds === b.finds && a.score === b.score && Math.round(aAvg) === Math.round(bAvg);
+  return exactTie ? null : a.id;
+}
+
+function finishMatch(room, reason) {
+  if (room.status === 'ended') return;
+  room.status = 'ended';
+  room.target = null;
+  room.countdownStartedAt = null;
+  room.searchStartsAt = null;
+  room.winnerId = chooseWinner(room);
+  room.endedReason = reason;
+  room.endedAt = Date.now();
+  io.to(room.code).emit('game:ended', {
+    winnerId: room.winnerId,
+    reason,
+    room: publicRoom(room)
+  });
+  emitRoom(room);
+}
+
+function maybeFinishFirstTo(room) {
+  const target = modeTarget(room.mode);
+  if (!target) return false;
+  const winner = room.players.find(p => p.finds >= target);
+  if (!winner) return false;
+  room.winnerId = winner.id;
+  room.status = 'ended';
+  room.target = null;
+  room.countdownStartedAt = null;
+  room.searchStartsAt = null;
+  room.endedReason = `first-to-${target}`;
+  room.endedAt = Date.now();
+  io.to(room.code).emit('game:ended', {
+    winnerId: winner.id,
+    reason: room.endedReason,
+    room: publicRoom(room)
+  });
+  emitRoom(room);
+  return true;
 }
 
 function endTimedOutRound(room) {
-  if (!room.target || !room.roundStartedAt) return false;
-  if (Date.now() - room.roundStartedAt < ROUND_LIMIT_MS) return false;
+  if (room.status !== 'playing' || room.target === null || !room.searchStartsAt) return false;
+  const now = Date.now();
+  if (now < room.searchStartsAt + ROUND_LIMIT_MS) return false;
 
   const finder = room.players.find(p => p.id !== room.currentCallerId);
-  if (finder) finder.score = Math.max(0, finder.score - 10);
+  if (finder) {
+    finder.score = Math.max(0, finder.score - 10);
+    finder.attempts += 1;
+  }
 
   room.lastResult = {
     type: 'timeout',
@@ -86,62 +198,167 @@ function endTimedOutRound(room) {
     elapsedMs: ROUND_LIMIT_MS
   };
   room.target = null;
-  room.roundStartedAt = null;
+  room.countdownStartedAt = null;
+  room.searchStartsAt = null;
   room.round += 1;
   if (finder) room.currentCallerId = finder.id;
+  io.to(room.code).emit('game:timeout', room.lastResult);
   return true;
 }
 
+function startMatchIfReady(room) {
+  if (room.players.length === 2 && room.status === 'waiting') {
+    room.status = 'playing';
+    room.matchStartedAt = Date.now();
+    room.lastResult = null;
+  }
+}
+
+function startFreshMatch(room, starterId) {
+  room.board = shuffledBoard(room.difficulty);
+  room.found = [];
+  room.target = null;
+  room.round = 1;
+  room.countdownStartedAt = null;
+  room.searchStartsAt = null;
+  room.lastResult = null;
+  room.winnerId = null;
+  room.endedReason = null;
+  room.endedAt = null;
+  room.players.forEach(resetPlayerStats);
+  room.currentCallerId = starterId || room.players[0]?.id || null;
+  room.status = room.players.length === 2 ? 'playing' : 'waiting';
+  room.matchStartedAt = room.players.length === 2 ? Date.now() : null;
+}
+
 setInterval(() => {
-  for (const room of rooms.values()) {
-    if (endTimedOutRound(room)) {
-      io.to(room.code).emit('game:timeout', room.lastResult);
-      emitRoom(room);
+  const now = Date.now();
+  for (const [code, room] of rooms.entries()) {
+    if (room.status === 'playing' && room.mode === 'timed' && room.matchStartedAt && now >= room.matchStartedAt + TIMED_MATCH_MS) {
+      finishMatch(room, 'time');
+      continue;
+    }
+
+    if (endTimedOutRound(room)) emitRoom(room);
+
+    for (const p of [...room.players]) {
+      if (!p.connected && p.disconnectedAt && now - p.disconnectedAt >= RECONNECT_GRACE_MS) {
+        room.players = room.players.filter(x => x.id !== p.id);
+        if (room.currentCallerId === p.id) room.currentCallerId = room.players[0]?.id || null;
+        room.target = null;
+        room.countdownStartedAt = null;
+        room.searchStartsAt = null;
+        if (room.players.length < 2 && room.status !== 'ended') room.status = 'waiting';
+        emitRoom(room);
+      }
+    }
+
+    if (room.players.length === 0) {
+      if (!room.emptySince) room.emptySince = now;
+      if (now - room.emptySince >= EMPTY_ROOM_TTL_MS) rooms.delete(code);
+    } else {
+      room.emptySince = null;
     }
   }
 }, 500);
 
 io.on('connection', socket => {
-  socket.on('room:create', ({ name, difficulty } = {}, callback = () => {}) => {
-    const max = Number(difficulty);
-    const selectedDifficulty = ALLOWED_DIFFICULTIES.has(max) ? max : 100;
+  socket.on('room:create', ({ name, difficulty, mode, playerToken } = {}, callback = () => {}) => {
+    const selectedDifficulty = ALLOWED_DIFFICULTIES.has(Number(difficulty)) ? Number(difficulty) : 100;
+    const selectedMode = ALLOWED_MODES.has(mode) ? mode : 'first5';
     const code = makeCode();
+    const player = {
+      id: makePlayerId(), token: String(playerToken || crypto.randomUUID()), socketId: socket.id,
+      name: sanitizeName(name), connected: true, disconnectedAt: null,
+      score: 0, finds: 0, totalFindMs: 0, fastestFindMs: null, wrongTaps: 0, attempts: 0
+    };
     const room = {
-      code,
-      difficulty: selectedDifficulty,
-      board: shuffledBoard(selectedDifficulty),
-      found: [],
-      players: [{ id: socket.id, name: sanitizeName(name), score: 0, finds: 0, totalFindMs: 0, wrongTaps: 0 }],
-      currentCallerId: socket.id,
-      target: null,
-      round: 1,
-      roundStartedAt: null,
-      lastResult: null
+      code, difficulty: selectedDifficulty, mode: selectedMode,
+      board: shuffledBoard(selectedDifficulty), found: [], players: [player],
+      currentCallerId: player.id, target: null, round: 1,
+      countdownStartedAt: null, searchStartsAt: null,
+      matchStartedAt: null, lastResult: null,
+      status: 'waiting', winnerId: null, endedReason: null,
+      createdAt: Date.now(), endedAt: null, emptySince: null
     };
     rooms.set(code, room);
     socket.join(code);
     socket.data.roomCode = code;
-    callback({ ok: true, room: publicRoom(room) });
+    socket.data.playerId = player.id;
+    callback({ ok: true, room: publicRoom(room), playerId: player.id, playerToken: player.token });
   });
 
-  socket.on('room:join', ({ code, name } = {}, callback = () => {}) => {
+  socket.on('room:join', ({ code, name, playerToken } = {}, callback = () => {}) => {
     const roomCode = String(code || '').trim().toUpperCase();
     const room = rooms.get(roomCode);
     if (!room) return callback({ ok: false, error: 'Room not found.' });
-    if (room.players.length >= 2) return callback({ ok: false, error: 'Room is full.' });
 
-    room.players.push({ id: socket.id, name: sanitizeName(name), score: 0, finds: 0, totalFindMs: 0, wrongTaps: 0 });
+    const token = String(playerToken || '');
+    const existing = token ? findPlayerByToken(room, token) : null;
+    if (existing) {
+      existing.socketId = socket.id;
+      existing.connected = true;
+      existing.disconnectedAt = null;
+      socket.join(roomCode);
+      socket.data.roomCode = roomCode;
+      socket.data.playerId = existing.id;
+      startMatchIfReady(room);
+      callback({ ok: true, room: publicRoom(room), playerId: existing.id, playerToken: existing.token, resumed: true });
+      emitRoom(room);
+      return;
+    }
+
+    if (room.players.length >= 2) return callback({ ok: false, error: 'Room is full.' });
+    const player = {
+      id: makePlayerId(), token: token || crypto.randomUUID(), socketId: socket.id,
+      name: sanitizeName(name), connected: true, disconnectedAt: null,
+      score: 0, finds: 0, totalFindMs: 0, fastestFindMs: null, wrongTaps: 0, attempts: 0
+    };
+    room.players.push(player);
     socket.join(roomCode);
     socket.data.roomCode = roomCode;
-    callback({ ok: true, room: publicRoom(room) });
+    socket.data.playerId = player.id;
+    startMatchIfReady(room);
+    callback({ ok: true, room: publicRoom(room), playerId: player.id, playerToken: player.token });
     emitRoom(room);
+  });
+
+  socket.on('room:resume', ({ code, playerToken } = {}, callback = () => {}) => {
+    const roomCode = String(code || '').trim().toUpperCase();
+    const room = rooms.get(roomCode);
+    if (!room) return callback({ ok: false, error: 'Room expired.' });
+    const player = findPlayerByToken(room, String(playerToken || ''));
+    if (!player) return callback({ ok: false, error: 'Could not restore your seat.' });
+
+    player.socketId = socket.id;
+    player.connected = true;
+    player.disconnectedAt = null;
+    socket.join(roomCode);
+    socket.data.roomCode = roomCode;
+    socket.data.playerId = player.id;
+    startMatchIfReady(room);
+    callback({ ok: true, room: publicRoom(room), playerId: player.id, playerToken: player.token });
+    emitRoom(room);
+  });
+
+  socket.on('game:random', (_payload = {}, callback = () => {}) => {
+    const room = getRoomForSocket(socket);
+    if (!room) return callback({ ok: false, error: 'Room not found.' });
+    if (room.status !== 'playing') return callback({ ok: false, error: 'Match is not active.' });
+    if (room.currentCallerId !== socket.data.playerId) return callback({ ok: false, error: "It's not your turn to call." });
+    if (room.target !== null) return callback({ ok: false, error: 'The other player is still searching.' });
+    const unused = room.board.filter(n => !room.found.includes(n));
+    if (!unused.length) return finishMatch(room, 'board-complete');
+    const number = unused[Math.floor(Math.random() * unused.length)];
+    callback({ ok: true, number });
   });
 
   socket.on('game:call', ({ number } = {}, callback = () => {}) => {
     const room = getRoomForSocket(socket);
     if (!room) return callback({ ok: false, error: 'Room not found.' });
+    if (room.status !== 'playing') return callback({ ok: false, error: room.status === 'ended' ? 'Match is over. Start a rematch.' : 'Waiting for Player 2.' });
     if (room.players.length < 2) return callback({ ok: false, error: 'Waiting for Player 2.' });
-    if (room.currentCallerId !== socket.id) return callback({ ok: false, error: "It's not your turn to call." });
+    if (room.currentCallerId !== socket.data.playerId) return callback({ ok: false, error: "It's not your turn to call." });
     if (room.target !== null) return callback({ ok: false, error: 'The other player is still searching.' });
 
     const n = Number(number);
@@ -149,29 +366,31 @@ io.on('connection', socket => {
     if (room.found.includes(n)) return callback({ ok: false, error: 'That number has already been found.' });
 
     room.target = n;
-    room.roundStartedAt = Date.now();
+    room.countdownStartedAt = Date.now();
+    room.searchStartsAt = room.countdownStartedAt + COUNTDOWN_MS;
     room.lastResult = null;
-    callback({ ok: true });
-    io.to(room.code).emit('game:called', { number: n, startedAt: room.roundStartedAt, limitMs: ROUND_LIMIT_MS });
+    callback({ ok: true, number: n });
+    io.to(room.code).emit('game:called', { number: n, countdownStartedAt: room.countdownStartedAt, searchStartsAt: room.searchStartsAt, limitMs: ROUND_LIMIT_MS });
     emitRoom(room);
   });
 
   socket.on('game:find', ({ number } = {}, callback = () => {}) => {
     const room = getRoomForSocket(socket);
     if (!room) return callback({ ok: false, error: 'Room not found.' });
-    if (room.players.length < 2) return callback({ ok: false, error: 'Game has not started.' });
-    if (room.currentCallerId === socket.id) return callback({ ok: false, error: 'The other player is searching.' });
+    if (room.status !== 'playing') return callback({ ok: false, error: 'Match is not active.' });
+    if (room.currentCallerId === socket.data.playerId) return callback({ ok: false, error: 'The other player is searching.' });
     if (room.target === null) return callback({ ok: false, error: 'No number has been called yet.' });
+    if (Date.now() < room.searchStartsAt) return callback({ ok: false, error: 'Wait for GO!' });
 
     if (endTimedOutRound(room)) {
-      io.to(room.code).emit('game:timeout', room.lastResult);
       emitRoom(room);
       return callback({ ok: false, error: 'Time ran out.' });
     }
 
     const n = Number(number);
-    const finder = room.players.find(p => p.id === socket.id);
+    const finder = getPlayerForSocket(socket, room);
     if (!finder) return callback({ ok: false, error: 'Player not found.' });
+    finder.attempts += 1;
 
     if (n !== room.target) {
       finder.wrongTaps += 1;
@@ -182,60 +401,50 @@ io.on('connection', socket => {
       return;
     }
 
-    const elapsedMs = Math.max(0, Date.now() - room.roundStartedAt);
+    const elapsedMs = Math.max(0, Date.now() - room.searchStartsAt);
     const speedBonus = Math.max(0, Math.round((ROUND_LIMIT_MS - elapsedMs) / 200));
     const points = 100 + speedBonus;
 
     finder.score += points;
     finder.finds += 1;
     finder.totalFindMs += elapsedMs;
+    finder.fastestFindMs = finder.fastestFindMs === null ? elapsedMs : Math.min(finder.fastestFindMs, elapsedMs);
     if (!room.found.includes(n)) room.found.push(n);
 
-    room.lastResult = { type: 'found', number: n, finderId: socket.id, elapsedMs, points };
+    room.lastResult = { type: 'found', number: n, finderId: finder.id, finderName: finder.name, elapsedMs, points };
     room.target = null;
-    room.roundStartedAt = null;
+    room.countdownStartedAt = null;
+    room.searchStartsAt = null;
     room.round += 1;
-    room.currentCallerId = socket.id;
+    room.currentCallerId = finder.id;
 
     io.to(room.code).emit('game:found', room.lastResult);
     callback({ ok: true, points, elapsedMs });
-    emitRoom(room);
+    if (!maybeFinishFirstTo(room)) emitRoom(room);
   });
 
-  socket.on('game:new', ({ difficulty } = {}, callback = () => {}) => {
+  socket.on('game:new', ({ difficulty, mode } = {}, callback = () => {}) => {
     const room = getRoomForSocket(socket);
     if (!room) return callback({ ok: false, error: 'Room not found.' });
-    const requested = Number(difficulty);
-    if (ALLOWED_DIFFICULTIES.has(requested)) room.difficulty = requested;
-
-    room.board = shuffledBoard(room.difficulty);
-    room.found = [];
-    room.target = null;
-    room.round = 1;
-    room.roundStartedAt = null;
-    room.lastResult = null;
-    room.players.forEach(p => { p.score = 0; p.finds = 0; p.totalFindMs = 0; p.wrongTaps = 0; });
-    room.currentCallerId = socket.id;
-
+    if (ALLOWED_DIFFICULTIES.has(Number(difficulty))) room.difficulty = Number(difficulty);
+    if (ALLOWED_MODES.has(mode)) room.mode = mode;
+    startFreshMatch(room, socket.data.playerId);
     callback({ ok: true, room: publicRoom(room) });
-    io.to(room.code).emit('game:rematch', { by: socket.id, difficulty: room.difficulty });
+    io.to(room.code).emit('game:rematch', { by: socket.data.playerId, difficulty: room.difficulty, mode: room.mode });
     emitRoom(room);
   });
 
   socket.on('disconnect', () => {
     const room = getRoomForSocket(socket);
     if (!room) return;
-    room.players = room.players.filter(p => p.id !== socket.id);
-    if (room.players.length === 0) {
-      rooms.delete(room.code);
-      return;
-    }
-    room.target = null;
-    room.roundStartedAt = null;
-    if (room.currentCallerId === socket.id) room.currentCallerId = room.players[0].id;
+    const player = getPlayerForSocket(socket, room);
+    if (!player) return;
+    if (player.socketId !== socket.id) return;
+    player.connected = false;
+    player.disconnectedAt = Date.now();
     emitRoom(room);
   });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, '0.0.0.0', () => console.log(`Number Hunt v2 running on port ${PORT}`));
+server.listen(PORT, '0.0.0.0', () => console.log(`Number Hunt v3 running on port ${PORT}`));

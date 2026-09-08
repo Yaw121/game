@@ -3,7 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
-  <meta name="theme-color" content="#0a0f0d" />
+  <meta name="theme-color" content="#07100b" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>Number Hunt Online</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -12,16 +14,23 @@
     <section id="lobby" class="panel lobby">
       <div class="brand">NUMBER HUNT</div>
       <h1>Find it fast.</h1>
-      <p class="sub">Call a number. Your opponent has 20 seconds to spot it on the scramble.</p>
+      <p class="sub">Call a number. Your opponent gets a 3-second countdown, then 20 seconds to spot it.</p>
 
       <label>Your name</label>
       <input id="nameInput" maxlength="18" placeholder="Player name" autocomplete="nickname" />
 
       <label>Difficulty</label>
       <div class="difficulty" id="difficultyPicker">
-        <button class="difficultyBtn" data-value="50">Easy<span>1–50</span></button>
-        <button class="difficultyBtn selected" data-value="100">Normal<span>1–100</span></button>
-        <button class="difficultyBtn" data-value="150">Hard<span>1–150</span></button>
+        <button class="choiceBtn" data-value="50">Easy<span>1–50</span></button>
+        <button class="choiceBtn selected" data-value="100">Normal<span>1–100</span></button>
+        <button class="choiceBtn" data-value="150">Hard<span>1–150</span></button>
+      </div>
+
+      <label>Match mode</label>
+      <div class="modePicker" id="modePicker">
+        <button class="modeBtn selected" data-value="first5">First to 5<span>Quick match</span></button>
+        <button class="modeBtn" data-value="first10">First to 10<span>Longer match</span></button>
+        <button class="modeBtn" data-value="timed">2 minutes<span>Most finds wins</span></button>
       </div>
 
       <div class="actions"><button id="createBtn" class="primary">Create room</button></div>
@@ -35,39 +44,40 @@
     </section>
 
     <section id="game" class="game hidden">
-      <header class="topbar">
+      <header class="topbar stickyTop">
         <div>
           <div class="tiny">ROOM</div>
-          <button id="roomCode" class="codeBtn" title="Copy room code">-----</button>
+          <button id="roomCode" class="codeBtn" title="Share room">-----</button>
         </div>
         <div class="centerStatus">
           <div id="turnText" class="turnText">Waiting for player…</div>
           <div id="targetText" class="targetText">Share the room code</div>
         </div>
-        <button id="newBtn" class="ghost">Rematch</button>
+        <button id="inviteBtn" class="ghost miniBtn">Invite</button>
       </header>
 
-      <section class="roundHud">
+      <section class="roundHud stickyHud">
         <div class="roundPill"><span>ROUND</span><strong id="roundNum">1</strong></div>
         <div class="timerWrap">
           <div class="timerTop"><span id="timerLabel">READY</span><strong id="timerText">20.0</strong></div>
           <div class="timerTrack"><div id="timerBar" class="timerBar"></div></div>
         </div>
-        <div class="roundPill"><span>BOARD</span><strong id="boardSize">100</strong></div>
+        <div class="roundPill"><span id="modeLabel">FIRST TO</span><strong id="modeValue">5</strong></div>
       </section>
 
       <section id="scoreBar" class="scoreBar"></section>
 
       <section class="boardWrap"><div id="board" class="board"></div></section>
 
-      <section class="controls panel">
+      <section class="controls panel stickyControls">
         <div id="callerControls" class="hidden controlBlock">
           <strong>Your turn to call a number</strong>
           <div class="callRow">
             <input id="numberInput" type="number" min="1" max="100" placeholder="1–100" inputmode="numeric" />
             <button id="callBtn" class="primary">Call</button>
           </div>
-          <span class="hint">Tap any uncircled number to fill the box, then press Call.</span>
+          <button id="randomBtn" class="secondaryWide">🎲 Give me a number</button>
+          <span class="hint">Tap an uncircled number to fill the box, or let the game choose one.</span>
         </div>
         <div id="finderControls" class="hidden controlBlock">
           <strong>Find the called number and tap it.</strong>
@@ -75,12 +85,28 @@
         </div>
         <div id="waitingControls" class="controlBlock">
           <strong>Waiting for Player 2…</strong>
-          <span class="hint">Tap the room code to copy it and send it to your friend.</span>
+          <span class="hint">Tap Invite to send your friend the room link.</span>
         </div>
+        <div id="reconnectNotice" class="hidden reconnectNotice">Opponent disconnected — holding their seat for 90 seconds…</div>
         <p id="gameMsg" class="msg"></p>
       </section>
     </section>
   </main>
+
+  <div id="countdown" class="countdownOverlay hidden"><div id="countdownText">3</div></div>
+
+  <div id="resultModal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modalCard">
+      <div class="brand">MATCH COMPLETE</div>
+      <h2 id="winnerTitle">Winner!</h2>
+      <p id="winnerSubtitle" class="sub"></p>
+      <div id="finalStats" class="finalStats"></div>
+      <div class="modalActions">
+        <button id="rematchBtn" class="primary">Rematch</button>
+        <button id="closeStatsBtn">View board</button>
+      </div>
+    </div>
+  </div>
 
   <div id="toast" class="toast"></div>
   <div id="flash" class="flash"></div>
