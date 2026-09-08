@@ -1,0 +1,15 @@
+{
+  "name": "number-hunt-online",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Two-player online scrambled-number hunt game with live synchronized circles.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1"
+  }
+}

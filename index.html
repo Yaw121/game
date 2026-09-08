@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Number Hunt Online</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="app">
+    <section id="lobby" class="panel lobby">
+      <div class="brand">NUMBER HUNT</div>
+      <h1>Find it before they do.</h1>
+      <p class="sub">A live two-player scramble-number game inspired by the tabletop version.</p>
+
+      <label>Your name</label>
+      <input id="nameInput" maxlength="18" placeholder="Player name" />
+      <div class="actions">
+        <button id="createBtn" class="primary">Create room</button>
+      </div>
+
+      <div class="divider"><span>or</span></div>
+      <label>Join with room code</label>
+      <div class="joinRow">
+        <input id="codeInput" maxlength="5" placeholder="ABCDE" autocomplete="off" />
+        <button id="joinBtn">Join</button>
+      </div>
+      <p id="lobbyMsg" class="msg"></p>
+    </section>
+
+    <section id="game" class="game hidden">
+      <header class="topbar">
+        <div>
+          <div class="tiny">ROOM</div>
+          <button id="roomCode" class="codeBtn" title="Copy room code">-----</button>
+        </div>
+        <div class="centerStatus">
+          <div id="turnText" class="turnText">Waiting for player…</div>
+          <div id="targetText" class="targetText">Share the room code</div>
+        </div>
+        <button id="newBtn" class="ghost">New game</button>
+      </header>
+
+      <section id="scoreBar" class="scoreBar"></section>
+
+      <section class="boardWrap">
+        <div id="board" class="board"></div>
+      </section>
+
+      <section class="controls panel">
+        <div id="callerControls" class="hidden controlBlock">
+          <strong>Your turn to call a number</strong>
+          <div class="callRow">
+            <input id="numberInput" type="number" min="1" max="130" placeholder="1–130" />
+            <button id="callBtn" class="primary">Call number</button>
+          </div>
+          <span class="hint">Tip: you can also tap any uncircled number on the board to fill the box.</span>
+        </div>
+        <div id="finderControls" class="hidden controlBlock">
+          <strong>Find the called number and tap it.</strong>
+          <span class="hint">When you find it, the circle appears instantly on both screens.</span>
+        </div>
+        <div id="waitingControls" class="controlBlock">
+          <strong>Waiting for Player 2…</strong>
+          <span class="hint">Send them the room code above.</span>
+        </div>
+        <p id="gameMsg" class="msg"></p>
+      </section>
+    </section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
