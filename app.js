@@ -124,6 +124,32 @@ if (urlRoom) $('#codeInput').value = urlRoom.toUpperCase().slice(0, 5);
 
 function enterGame() { lobby.classList.add('hidden'); game.classList.remove('hidden'); }
 
+
+function returnToLobby(message = '') {
+  cancelAnimationFrame(rafId);
+  cancelAnimationFrame(countdownRaf);
+  localStorage.removeItem(roomCodeKey);
+  room = null;
+  myId = null;
+  missNumber = null;
+  lastEndedStamp = null;
+  $('#resultModal').classList.add('hidden');
+  $('#countdown').classList.add('hidden');
+  game.classList.add('hidden');
+  lobby.classList.remove('hidden');
+  lobbyMsg.textContent = message;
+}
+
+socket.on('room:kicked', ({ message } = {}) => {
+  returnToLobby(message || 'You were removed from the room.');
+  vibrate([60,40,60]);
+});
+
+socket.on('room:closed', ({ message } = {}) => {
+  returnToLobby(message || 'The room was closed.');
+  vibrate(50);
+});
+
 socket.on('room:update', data => {
   room = data;
   render();
@@ -159,6 +185,33 @@ function shareRoom() {
 }
 $('#roomCode').onclick = shareRoom;
 $('#inviteBtn').onclick = shareRoom;
+
+
+$('#leaveGameBtn').onclick = () => {
+  if (!room) return returnToLobby();
+  const isHost = room.hostId === myId;
+  const message = isHost
+    ? 'Leave and close this room for everyone?'
+    : 'Leave this game?';
+  if (!confirm(message)) return;
+
+  socket.emit('room:leave', {}, res => {
+    if (!res?.ok) return showToast(res?.error || 'Could not leave the room.');
+    returnToLobby(isHost ? 'Room closed.' : 'You left the game.');
+  });
+};
+
+$('#removePlayerBtn').onclick = () => {
+  if (!room || room.hostId !== myId) return;
+  const opponent = room.players.find(p => p.id !== myId);
+  if (!opponent) return showToast('There is no player to remove.');
+  if (!confirm(`Remove ${opponent.name} from the room?`)) return;
+
+  socket.emit('room:kick', { playerId: opponent.id }, res => {
+    if (!res?.ok) return showToast(res?.error || 'Could not remove player.');
+    showToast(`${opponent.name} removed. You can invite someone else.`);
+  });
+};
 
 $('#callBtn').onclick = callNumber;
 $('#numberInput').addEventListener('keydown', e => { if (e.key === 'Enter') callNumber(); });
@@ -216,6 +269,9 @@ function renderStatus() {
   const caller = room.players.find(p => p.id === room.currentCallerId);
   const someoneOffline = room.players.length === 2 && room.players.some(p => !p.connected);
   $('#reconnectNotice').classList.toggle('hidden', !someoneOffline);
+  const iAmHost = room.hostId === myId;
+  const hasOpponent = room.players.some(p => p.id !== myId);
+  $('#removePlayerBtn').classList.toggle('hidden', !(iAmHost && hasOpponent));
   $('#waitingControls').classList.toggle('hidden', !waiting);
   $('#callerControls').classList.add('hidden'); $('#finderControls').classList.add('hidden');
 

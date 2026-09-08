@@ -76,6 +76,7 @@ function roomReady(room) {
 function publicRoom(room) {
   return {
     code: room.code,
+    hostId: room.hostId,
     difficulty: room.difficulty,
     mode: room.mode,
     modeTarget: modeTarget(room.mode),
@@ -273,7 +274,7 @@ io.on('connection', socket => {
       score: 0, finds: 0, totalFindMs: 0, fastestFindMs: null, wrongTaps: 0, attempts: 0
     };
     const room = {
-      code, difficulty: selectedDifficulty, mode: selectedMode,
+      code, hostId: player.id, difficulty: selectedDifficulty, mode: selectedMode,
       board: shuffledBoard(selectedDifficulty), found: [], players: [player],
       currentCallerId: player.id, target: null, round: 1,
       countdownStartedAt: null, searchStartsAt: null,
@@ -338,6 +339,64 @@ io.on('connection', socket => {
     socket.data.playerId = player.id;
     startMatchIfReady(room);
     callback({ ok: true, room: publicRoom(room), playerId: player.id, playerToken: player.token });
+    emitRoom(room);
+  });
+
+
+  socket.on('room:leave', (_payload = {}, callback = () => {}) => {
+    const room = getRoomForSocket(socket);
+    if (!room) return callback({ ok: true });
+    const player = getPlayerForSocket(socket, room);
+    if (!player) return callback({ ok: true });
+
+    // If the host leaves, close the room for everyone immediately.
+    if (player.id === room.hostId) {
+      const otherPlayers = room.players.filter(p => p.id !== player.id);
+      for (const other of otherPlayers) {
+        const otherSocket = io.sockets.sockets.get(other.socketId);
+        if (otherSocket) {
+          otherSocket.emit('room:closed', { message: 'The host ended the room.' });
+          otherSocket.leave(room.code);
+          otherSocket.data.roomCode = null;
+          otherSocket.data.playerId = null;
+        }
+      }
+      socket.leave(room.code);
+      socket.data.roomCode = null;
+      socket.data.playerId = null;
+      rooms.delete(room.code);
+      return callback({ ok: true, closed: true });
+    }
+
+    // A guest can leave immediately without waiting for reconnect grace.
+    room.players = room.players.filter(p => p.id !== player.id);
+    socket.leave(room.code);
+    socket.data.roomCode = null;
+    socket.data.playerId = null;
+    startFreshMatch(room, room.hostId);
+    callback({ ok: true, closed: false });
+    emitRoom(room);
+  });
+
+  socket.on('room:kick', ({ playerId } = {}, callback = () => {}) => {
+    const room = getRoomForSocket(socket);
+    if (!room) return callback({ ok: false, error: 'Room not found.' });
+    if (socket.data.playerId !== room.hostId) return callback({ ok: false, error: 'Only the host can remove a player.' });
+
+    const target = room.players.find(p => p.id === playerId && p.id !== room.hostId);
+    if (!target) return callback({ ok: false, error: 'Player not found.' });
+
+    const targetSocket = io.sockets.sockets.get(target.socketId);
+    if (targetSocket) {
+      targetSocket.emit('room:kicked', { message: 'The host removed you from the room.' });
+      targetSocket.leave(room.code);
+      targetSocket.data.roomCode = null;
+      targetSocket.data.playerId = null;
+    }
+
+    room.players = room.players.filter(p => p.id !== target.id);
+    startFreshMatch(room, room.hostId);
+    callback({ ok: true });
     emitRoom(room);
   });
 

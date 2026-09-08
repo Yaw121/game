@@ -22,3 +22,11 @@ Two-player real-time scrambled-number hunt optimized for phones.
 - Root directory: leave blank
 
 Replace the six repository-root files with this v3 set, commit, then use Render → Manual Deploy → Deploy latest commit.
+
+
+## v3.1 room controls
+- Any player can use **Leave Game** to leave immediately.
+- If the host leaves, the room closes for everyone.
+- The host gets a **Remove Player** button whenever an opponent is in the room.
+- Removed players are returned to the lobby and the host can invite someone else into the same room.
+- Refreshes and short connection drops still use the 90-second reconnect protection; only the explicit Leave Game action removes the seat immediately.
